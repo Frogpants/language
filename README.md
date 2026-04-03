@@ -19,6 +19,12 @@ g++ -std=c++17 interpreter/run.cpp -o run
 ./run test.ge
 ~~~
 
+On Linux, when using the built-in window library, compile with X11:
+
+~~~bash
+g++ -std=c++17 interpreter/run.cpp -o run -lX11
+~~~
+
 ## File Imports
 
 Imports use angle brackets and do not require a semicolon.
@@ -266,12 +272,75 @@ Constructors and math helpers currently available:
 - mix
 - sqrt
 
+## Built-in Library: window
+
+The `window` library is built into the interpreter and can be loaded with:
+
+~~~cpp
+import <window>
+~~~
+
+It is exposed through `window.*` methods.
+
+### Setup and Window State
+- `window.create(width, height, title)`
+- `window.close()`
+- `window.setTitle(title)`
+- `window.setSize(width, height)`
+- `window.platform()`
+- `window.isOpen()`
+- `window.shouldClose()`
+- `window.width()`
+- `window.height()`
+
+### Frame and Drawing API
+- `window.beginFrame()`
+- `window.endFrame()`
+- `window.clear(r, g, b, a)`
+- `window.drawRect(x, y, w, h, r, g, b, a)`
+- `window.drawCircle(x, y, radius, r, g, b, a)`
+- `window.drawLine(x1, y1, x2, y2, thickness, r, g, b, a)`
+- `window.drawText(text, x, y, size)`
+- `window.drawCount()`
+
+### Input and Mouse API
+- `window.mouseX()`
+- `window.mouseY()`
+- `window.setMousePosition(x, y)`
+- `window.setMouseVisible(visible)`
+- `window.captureMouse(enabled)`
+- `window.keyDown(keyCode)`
+- `window.mouseDown(button)`
+
+### Input State Helpers (for scripting/testing)
+- `window.setKeyState(keyCode, down)`
+- `window.setMouseButton(button, down)`
+
+### Example
+
+~~~cpp
+import <window>
+
+window.create(1280, 720, "GE Window Demo");
+window.beginFrame();
+window.clear(0.1, 0.1, 0.12, 1.0);
+window.drawRect(50, 60, 240, 120, 0.3, 0.7, 1.0, 1.0);
+window.drawText("Hello", 72, 90, 24);
+window.endFrame();
+
+print(window.width());
+print(window.height());
+print(window.drawCount());
+~~~
+
+The window backend is native to the operating system. On Linux, this currently uses X11, so created windows match OS-native window behavior.
+
 ## Current Syntax Notes
 
 - Most statements require semicolons.
 - Import intentionally does not require a semicolon.
 - print requires parentheses.
-- Method calls are currently supported on list objects.
+- Method calls are currently supported on list objects and the built-in window library.
 - Braces are required for if/else/for/while blocks.
 
 ## Example Program

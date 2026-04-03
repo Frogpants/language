@@ -128,6 +128,10 @@ inline std::vector<Token> tokenize(const std::string& source) {
         else if(c == ']') tokens.push_back({TokenType::RBRACKET, "]"});
         else if(c == ',') tokens.push_back({TokenType::COMMA, ","});
         else if(c == '.') tokens.push_back({TokenType::DOT, "."});
+        else if((c == '+' || c == '-' || c == '*' || c == '/') && i + 1 < source.length() && source[i + 1] == '=') {
+            tokens.push_back({TokenType::EQUAL, std::string(1, c) + "="});
+            i++;
+        }
         else if(c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^') {
             tokens.push_back({TokenType::OPERATOR, std::string(1, c)});
         }

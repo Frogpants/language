@@ -11,7 +11,12 @@ if [ ! -f "$SCRIPT_PATH" ]; then
 fi
 
 echo "[build] compiling interpreter..."
-if ! g++ -std=c++17 interpreter/run.cpp -o /tmp/interp; then
+EXTRA_LIBS=""
+if [ "$(uname -s)" = "Linux" ]; then
+    EXTRA_LIBS="-lX11"
+fi
+
+if ! g++ -std=c++17 interpreter/run.cpp -o /tmp/interp $EXTRA_LIBS; then
     echo "Build failed."
     exit 1
 fi

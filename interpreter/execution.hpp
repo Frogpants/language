@@ -13,6 +13,10 @@
 #include <algorithm>
 #include <fstream>
 #include <set>
+#include <unordered_set>
+#include <thread>
+#include <chrono>
+#include "window_backend.hpp"
 
 struct RuntimeValue {
     GETypes::VariableType type;
@@ -421,6 +425,12 @@ inline RuntimeValue callFunction(
     const std::unordered_map<std::string, RuntimeValue>& symbolTable
 );
 
+inline RuntimeValue callFunction(
+    const std::vector<Token>& tokens,
+    size_t start,
+    std::unordered_map<std::string, RuntimeValue>& symbolTable
+);
+
 inline RuntimeValue evaluateRuntimeExpression(
     const std::vector<Token>& tokens,
     size_t start,
@@ -480,6 +490,517 @@ inline RuntimeValue listValueToRuntimeValue(const GETypes::ListType::Value& valu
     }, value);
 }
 
+struct WindowState {
+    bool created = false;
+    bool shouldClose = false;
+    int width = 800;
+    int height = 600;
+    std::string title = "GE Window";
+
+    float clearR = 0.1f;
+    float clearG = 0.1f;
+    float clearB = 0.1f;
+    float clearA = 1.0f;
+
+    float mouseX = 0.0f;
+    float mouseY = 0.0f;
+    bool mouseVisible = true;
+    bool mouseCaptured = false;
+
+    std::set<int> keysDown;
+    std::set<int> mouseButtonsDown;
+    int queuedDrawCommands = 0;
+    bool frameCleared = false;
+    NativeWindowBackend backend;
+};
+
+inline WindowState windowState;
+
+inline float mouseToCenteredX(float rawX) {
+    return rawX - static_cast<float>(windowState.width) * 0.5f;
+}
+
+inline float mouseToCenteredY(float rawY) {
+    return static_cast<float>(windowState.height) * 0.5f - rawY;
+}
+
+inline float centeredToMouseX(float centeredX) {
+    return centeredX + static_cast<float>(windowState.width) * 0.5f;
+}
+
+inline float centeredToMouseY(float centeredY) {
+    return static_cast<float>(windowState.height) * 0.5f - centeredY;
+}
+
+inline int centeredToWindowPixelX(double centeredX) {
+    return static_cast<int>(centeredX + static_cast<double>(windowState.width) * 0.5);
+}
+
+inline int centeredToWindowPixelY(double centeredY) {
+    return static_cast<int>(static_cast<double>(windowState.height) * 0.5 - centeredY);
+}
+
+inline bool isAssignmentOperatorToken(const Token& token) {
+    return token.type == TokenType::EQUAL &&
+           (token.value == "=" || token.value == "+=" || token.value == "-=" ||
+            token.value == "*=" || token.value == "/=");
+}
+
+inline std::string assignmentToBinaryOperator(const std::string& assignmentOp) {
+    if (assignmentOp == "+=") return "+";
+    if (assignmentOp == "-=") return "-";
+    if (assignmentOp == "*=") return "*";
+    if (assignmentOp == "/=") return "/";
+    return "";
+}
+
+inline double applyScalarAssignmentOperator(double lhs, double rhs, const std::string& assignmentOp) {
+    if (assignmentOp == "=") {
+        return rhs;
+    }
+    const std::string binaryOp = assignmentToBinaryOperator(assignmentOp);
+    if (binaryOp.empty()) {
+        throw std::runtime_error("Unsupported assignment operator: " + assignmentOp);
+    }
+    return applyOperator(binaryOp, lhs, rhs);
+}
+
+inline RuntimeValue applyCompoundVectorAssignment(
+    const RuntimeValue& lhs,
+    const RuntimeValue& rhs,
+    const std::string& assignmentOp
+) {
+    if (assignmentOp == "=") {
+        RuntimeValue out = makeDefaultValueForType(lhs.typeName);
+        if (lhs.typeName == "vec2") {
+            if (rhs.typeName == "vec2") out.vec2Val = rhs.vec2Val;
+            else out.vec2Val = GETypes::Vec2Type(rhs.getNumberValue());
+        } else if (lhs.typeName == "vec3") {
+            if (rhs.typeName == "vec3") out.vec3Val = rhs.vec3Val;
+            else out.vec3Val = GETypes::Vec3Type(rhs.getNumberValue());
+        } else if (lhs.typeName == "vec4") {
+            if (rhs.typeName == "vec4") out.vec4Val = rhs.vec4Val;
+            else out.vec4Val = GETypes::Vec4Type(rhs.getNumberValue());
+        }
+        return out;
+    }
+
+    const std::string op = assignmentToBinaryOperator(assignmentOp);
+    if (op.empty()) {
+        throw std::runtime_error("Unsupported assignment operator: " + assignmentOp);
+    }
+
+    RuntimeValue result = makeDefaultValueForType(lhs.typeName);
+
+    if (lhs.typeName == "vec2") {
+        if (rhs.typeName == "vec2") {
+            if (op == "+") result.vec2Val = lhs.vec2Val + rhs.vec2Val;
+            else if (op == "-") result.vec2Val = lhs.vec2Val - rhs.vec2Val;
+            else if (op == "*") result.vec2Val = lhs.vec2Val * rhs.vec2Val;
+            else if (op == "/") result.vec2Val = lhs.vec2Val / rhs.vec2Val;
+            else throw std::runtime_error("Unsupported vector operator: " + op);
+            return result;
+        }
+        if (rhs.typeName == "int" || rhs.typeName == "float" || rhs.typeName == "bool") {
+            const double scalar = rhs.getNumberValue();
+            if (op == "+") result.vec2Val = lhs.vec2Val + scalar;
+            else if (op == "-") result.vec2Val = lhs.vec2Val - scalar;
+            else if (op == "*") result.vec2Val = lhs.vec2Val * scalar;
+            else if (op == "/") result.vec2Val = lhs.vec2Val / scalar;
+            else throw std::runtime_error("Unsupported vector operator: " + op);
+            return result;
+        }
+    }
+
+    if (lhs.typeName == "vec3") {
+        if (rhs.typeName == "vec3") {
+            if (op == "+") result.vec3Val = lhs.vec3Val + rhs.vec3Val;
+            else if (op == "-") result.vec3Val = lhs.vec3Val - rhs.vec3Val;
+            else if (op == "*") result.vec3Val = lhs.vec3Val * rhs.vec3Val;
+            else if (op == "/") result.vec3Val = lhs.vec3Val / rhs.vec3Val;
+            else throw std::runtime_error("Unsupported vector operator: " + op);
+            return result;
+        }
+        if (rhs.typeName == "int" || rhs.typeName == "float" || rhs.typeName == "bool") {
+            const double scalar = rhs.getNumberValue();
+            if (op == "+") result.vec3Val = lhs.vec3Val + scalar;
+            else if (op == "-") result.vec3Val = lhs.vec3Val - scalar;
+            else if (op == "*") result.vec3Val = lhs.vec3Val * scalar;
+            else if (op == "/") result.vec3Val = lhs.vec3Val / scalar;
+            else throw std::runtime_error("Unsupported vector operator: " + op);
+            return result;
+        }
+    }
+
+    if (lhs.typeName == "vec4") {
+        if (rhs.typeName == "vec4") {
+            if (op == "+") result.vec4Val = lhs.vec4Val + rhs.vec4Val;
+            else if (op == "-") result.vec4Val = lhs.vec4Val - rhs.vec4Val;
+            else if (op == "*") result.vec4Val = lhs.vec4Val * rhs.vec4Val;
+            else if (op == "/") result.vec4Val = lhs.vec4Val / rhs.vec4Val;
+            else throw std::runtime_error("Unsupported vector operator: " + op);
+            return result;
+        }
+        if (rhs.typeName == "int" || rhs.typeName == "float" || rhs.typeName == "bool") {
+            const double scalar = rhs.getNumberValue();
+            if (op == "+") result.vec4Val = lhs.vec4Val + scalar;
+            else if (op == "-") result.vec4Val = lhs.vec4Val - scalar;
+            else if (op == "*") result.vec4Val = lhs.vec4Val * scalar;
+            else if (op == "/") result.vec4Val = lhs.vec4Val / scalar;
+            else throw std::runtime_error("Unsupported vector operator: " + op);
+            return result;
+        }
+    }
+
+    throw std::runtime_error("Invalid vector assignment operation");
+}
+
+inline std::string getWindowBackendName() {
+#if defined(__linux__)
+    return "linux-x11";
+#elif defined(_WIN32)
+    return "windows-win32";
+#elif defined(__APPLE__)
+    return "macos-cocoa";
+#else
+    return "unknown";
+#endif
+}
+
+inline RuntimeValue executeWindowMethodReadOnly(const std::string& methodName, const std::vector<RuntimeValue>& args) {
+    (void)args;
+    windowState.backend.pumpEvents(
+        windowState.shouldClose,
+        windowState.width,
+        windowState.height,
+        windowState.mouseX,
+        windowState.mouseY,
+        windowState.keysDown,
+        windowState.mouseButtonsDown
+    );
+
+    if (methodName == "platform") {
+        return RuntimeValue("string", getWindowBackendName());
+    }
+    if (methodName == "isOpen") {
+        return RuntimeValue("int", (windowState.created && !windowState.shouldClose) ? 1.0 : 0.0);
+    }
+    if (methodName == "shouldClose") {
+        return RuntimeValue("int", windowState.shouldClose ? 1.0 : 0.0);
+    }
+    if (methodName == "width") {
+        return RuntimeValue("int", static_cast<double>(windowState.width));
+    }
+    if (methodName == "height") {
+        return RuntimeValue("int", static_cast<double>(windowState.height));
+    }
+    if (methodName == "mouseX") {
+        return RuntimeValue("float", static_cast<double>(mouseToCenteredX(windowState.mouseX)));
+    }
+    if (methodName == "mouseY") {
+        return RuntimeValue("float", static_cast<double>(mouseToCenteredY(windowState.mouseY)));
+    }
+    if (methodName == "keyCode") {
+        if (args.size() != 1 || args[0].typeName != "string") {
+            throw std::runtime_error("window.keyCode expects exactly 1 string argument");
+        }
+        const int code = windowState.backend.resolveKeyCode(args[0].getStringValue());
+        return RuntimeValue("int", static_cast<double>(code));
+    }
+    if (methodName == "drawCount") {
+        return RuntimeValue("int", static_cast<double>(windowState.queuedDrawCommands));
+    }
+    if (methodName == "keyDown") {
+        if (args.size() != 1) {
+            throw std::runtime_error("window.keyDown expects exactly 1 argument");
+        }
+        int keyCode = 0;
+        if (args[0].typeName == "string") {
+            keyCode = windowState.backend.resolveKeyCode(args[0].getStringValue());
+        } else {
+            keyCode = static_cast<int>(args[0].getNumberValue());
+        }
+        return RuntimeValue("int", windowState.keysDown.count(keyCode) ? 1.0 : 0.0);
+    }
+    if (methodName == "mouseDown") {
+        if (args.size() != 1) {
+            throw std::runtime_error("window.mouseDown expects exactly 1 argument");
+        }
+        int button = static_cast<int>(args[0].getNumberValue());
+        return RuntimeValue("int", windowState.mouseButtonsDown.count(button) ? 1.0 : 0.0);
+    }
+
+    throw std::runtime_error("Unsupported window method in expression: " + methodName);
+}
+
+inline void executeWindowMethodStatement(const std::string& methodName, const std::vector<RuntimeValue>& args) {
+    if (methodName == "create") {
+        if (args.size() < 2 || args.size() > 3) {
+            throw std::runtime_error("window.create expects 2 or 3 arguments: width, height, [title]");
+        }
+        windowState.width = std::max(1, static_cast<int>(args[0].getNumberValue()));
+        windowState.height = std::max(1, static_cast<int>(args[1].getNumberValue()));
+        if (args.size() == 3) {
+            if (args[2].typeName != "string") {
+                throw std::runtime_error("window.create title must be a string");
+            }
+            windowState.title = args[2].getStringValue();
+        }
+
+        std::string createError;
+        if (!windowState.backend.create(windowState.width, windowState.height, windowState.title, createError)) {
+            throw std::runtime_error(createError);
+        }
+
+        windowState.created = true;
+        windowState.shouldClose = false;
+        windowState.keysDown.clear();
+        windowState.mouseButtonsDown.clear();
+        windowState.queuedDrawCommands = 0;
+        windowState.frameCleared = false;
+        windowState.backend.setMouseVisible(windowState.mouseVisible);
+        windowState.backend.setMouseCaptured(windowState.mouseCaptured);
+        return;
+    }
+    if (methodName == "close") {
+        windowState.shouldClose = true;
+        windowState.backend.destroy();
+        windowState.created = false;
+        return;
+    }
+    if (methodName == "setTitle") {
+        if (args.size() != 1 || args[0].typeName != "string") {
+            throw std::runtime_error("window.setTitle expects exactly 1 string argument");
+        }
+        windowState.title = args[0].getStringValue();
+        if (windowState.created) {
+            windowState.backend.setTitle(windowState.title);
+        }
+        return;
+    }
+    if (methodName == "setSize") {
+        if (args.size() != 2) {
+            throw std::runtime_error("window.setSize expects exactly 2 arguments");
+        }
+        windowState.width = std::max(1, static_cast<int>(args[0].getNumberValue()));
+        windowState.height = std::max(1, static_cast<int>(args[1].getNumberValue()));
+        if (windowState.created) {
+            windowState.backend.setSize(windowState.width, windowState.height);
+        }
+        return;
+    }
+    if (methodName == "beginFrame") {
+        windowState.queuedDrawCommands = 0;
+        windowState.frameCleared = false;
+        windowState.backend.pumpEvents(
+            windowState.shouldClose,
+            windowState.width,
+            windowState.height,
+            windowState.mouseX,
+            windowState.mouseY,
+            windowState.keysDown,
+            windowState.mouseButtonsDown
+        );
+        return;
+    }
+    if (methodName == "endFrame") {
+        if (windowState.created) {
+            if (!windowState.frameCleared) {
+                windowState.backend.beginFrame(windowState.clearR, windowState.clearG, windowState.clearB, windowState.width, windowState.height);
+            }
+            windowState.backend.endFrame(windowState.width, windowState.height);
+        }
+        windowState.backend.pumpEvents(
+            windowState.shouldClose,
+            windowState.width,
+            windowState.height,
+            windowState.mouseX,
+            windowState.mouseY,
+            windowState.keysDown,
+            windowState.mouseButtonsDown
+        );
+        return;
+    }
+    if (methodName == "clear") {
+        if (args.size() != 4) {
+            throw std::runtime_error("window.clear expects exactly 4 arguments (r, g, b, a)");
+        }
+        windowState.clearR = static_cast<float>(args[0].getNumberValue());
+        windowState.clearG = static_cast<float>(args[1].getNumberValue());
+        windowState.clearB = static_cast<float>(args[2].getNumberValue());
+        windowState.clearA = static_cast<float>(args[3].getNumberValue());
+        if (windowState.created) {
+            windowState.backend.beginFrame(windowState.clearR, windowState.clearG, windowState.clearB, windowState.width, windowState.height);
+            windowState.frameCleared = true;
+        }
+        return;
+    }
+    if (methodName == "drawRect") {
+        if (args.size() != 8) {
+            throw std::runtime_error("window.drawRect expects 8 arguments");
+        }
+        if (windowState.created) {
+            const int x = centeredToWindowPixelX(args[0].getNumberValue());
+            const int y = centeredToWindowPixelY(args[1].getNumberValue());
+            const unsigned int w = static_cast<unsigned int>(std::max(0.0, args[2].getNumberValue()));
+            const unsigned int h = static_cast<unsigned int>(std::max(0.0, args[3].getNumberValue()));
+            windowState.backend.drawRect(
+                x,
+                y,
+                w,
+                h,
+                static_cast<float>(args[4].getNumberValue()),
+                static_cast<float>(args[5].getNumberValue()),
+                static_cast<float>(args[6].getNumberValue())
+            );
+        }
+        windowState.queuedDrawCommands++;
+        return;
+    }
+    if (methodName == "drawCircle") {
+        if (args.size() != 7) {
+            throw std::runtime_error("window.drawCircle expects 7 arguments");
+        }
+        if (windowState.created) {
+            const int cx = centeredToWindowPixelX(args[0].getNumberValue());
+            const int cy = centeredToWindowPixelY(args[1].getNumberValue());
+            const int radius = static_cast<int>(std::max(0.0, args[2].getNumberValue()));
+            windowState.backend.drawCircle(
+                cx,
+                cy,
+                radius,
+                static_cast<float>(args[3].getNumberValue()),
+                static_cast<float>(args[4].getNumberValue()),
+                static_cast<float>(args[5].getNumberValue())
+            );
+        }
+        windowState.queuedDrawCommands++;
+        return;
+    }
+    if (methodName == "drawLine") {
+        if (args.size() != 9) {
+            throw std::runtime_error("window.drawLine expects 9 arguments");
+        }
+        if (windowState.created) {
+            const int x1 = centeredToWindowPixelX(args[0].getNumberValue());
+            const int y1 = centeredToWindowPixelY(args[1].getNumberValue());
+            const int x2 = centeredToWindowPixelX(args[2].getNumberValue());
+            const int y2 = centeredToWindowPixelY(args[3].getNumberValue());
+            const int thickness = std::max(1, static_cast<int>(args[4].getNumberValue()));
+            windowState.backend.drawLine(
+                x1,
+                y1,
+                x2,
+                y2,
+                thickness,
+                static_cast<float>(args[5].getNumberValue()),
+                static_cast<float>(args[6].getNumberValue()),
+                static_cast<float>(args[7].getNumberValue())
+            );
+        }
+        windowState.queuedDrawCommands++;
+        return;
+    }
+    if (methodName == "drawText") {
+        if (args.size() != 4 || args[0].typeName != "string") {
+            throw std::runtime_error("window.drawText expects (string text, x, y, size)");
+        }
+        if (windowState.created) {
+            const std::string text = args[0].getStringValue();
+            const int x = centeredToWindowPixelX(args[1].getNumberValue());
+            const int y = centeredToWindowPixelY(args[2].getNumberValue());
+            (void)args[3];
+            windowState.backend.drawText(text, x, y);
+        }
+        windowState.queuedDrawCommands++;
+        return;
+    }
+    if (methodName == "setMousePosition") {
+        if (args.size() != 2) {
+            throw std::runtime_error("window.setMousePosition expects exactly 2 arguments");
+        }
+        windowState.mouseX = centeredToMouseX(static_cast<float>(args[0].getNumberValue()));
+        windowState.mouseY = centeredToMouseY(static_cast<float>(args[1].getNumberValue()));
+        if (windowState.created) {
+            windowState.backend.setMousePosition(static_cast<int>(windowState.mouseX), static_cast<int>(windowState.mouseY));
+        }
+        return;
+    }
+    if (methodName == "setMouseVisible") {
+        if (args.size() != 1) {
+            throw std::runtime_error("window.setMouseVisible expects exactly 1 argument");
+        }
+        windowState.mouseVisible = args[0].getNumberValue() != 0.0;
+        if (windowState.created) {
+            windowState.backend.setMouseVisible(windowState.mouseVisible);
+        }
+        return;
+    }
+    if (methodName == "captureMouse") {
+        if (args.size() != 1) {
+            throw std::runtime_error("window.captureMouse expects exactly 1 argument");
+        }
+        windowState.mouseCaptured = args[0].getNumberValue() != 0.0;
+        if (windowState.created) {
+            windowState.backend.setMouseCaptured(windowState.mouseCaptured);
+        }
+        return;
+    }
+    if (methodName == "setKeyState") {
+        if (args.size() != 2) {
+            throw std::runtime_error("window.setKeyState expects exactly 2 arguments (keyCode, down)");
+        }
+        int keyCode = static_cast<int>(args[0].getNumberValue());
+        bool down = args[1].getNumberValue() != 0.0;
+        if (down) {
+            windowState.keysDown.insert(keyCode);
+        } else {
+            windowState.keysDown.erase(keyCode);
+        }
+        return;
+    }
+    if (methodName == "setMouseButton") {
+        if (args.size() != 2) {
+            throw std::runtime_error("window.setMouseButton expects exactly 2 arguments (button, down)");
+        }
+        int button = static_cast<int>(args[0].getNumberValue());
+        bool down = args[1].getNumberValue() != 0.0;
+        if (down) {
+            windowState.mouseButtonsDown.insert(button);
+        } else {
+            windowState.mouseButtonsDown.erase(button);
+        }
+        return;
+    }
+    if (methodName == "sleep") {
+        if (args.size() != 1) {
+            throw std::runtime_error("window.sleep expects exactly 1 argument (milliseconds)");
+        }
+        int ms = std::max(0, static_cast<int>(args[0].getNumberValue()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        return;
+    }
+
+    if (
+        methodName == "platform" ||
+        methodName == "isOpen" ||
+        methodName == "shouldClose" ||
+        methodName == "width" ||
+        methodName == "height" ||
+        methodName == "mouseX" ||
+        methodName == "mouseY" ||
+        methodName == "keyCode" ||
+        methodName == "drawCount" ||
+        methodName == "keyDown" ||
+        methodName == "mouseDown"
+    ) {
+        (void)executeWindowMethodReadOnly(methodName, args);
+        return;
+    }
+
+    throw std::runtime_error("Unknown window method: " + methodName);
+}
+
 inline std::vector<RuntimeValue> parseArgumentList(
     const std::vector<Token>& tokens,
     size_t argsStart,
@@ -527,6 +1048,12 @@ inline RuntimeValue executeMethodCallReadOnly(
     const std::string methodName = tokens[start + 2].value;
     const size_t closeParen = findMatchingParen(tokens, start + 3);
 
+    const std::vector<RuntimeValue> args = parseArgumentList(tokens, start + 4, closeParen - 1, symbolTable);
+
+    if (objectName == "window") {
+        return executeWindowMethodReadOnly(methodName, args);
+    }
+
     auto objIt = symbolTable.find(objectName);
     if (objIt == symbolTable.end()) {
         throw std::runtime_error("Unknown object: " + objectName);
@@ -535,7 +1062,6 @@ inline RuntimeValue executeMethodCallReadOnly(
         throw std::runtime_error("Method calls currently supported only on list objects");
     }
 
-    const std::vector<RuntimeValue> args = parseArgumentList(tokens, start + 4, closeParen - 1, symbolTable);
     const RuntimeValue& obj = objIt->second;
 
     if (methodName == "size") {
@@ -587,14 +1113,6 @@ inline double evaluateExpression(
             continue;
         }
 
-        if (isMemberAccessStart(tokens, i)) {
-            const std::string objectName = tokens[i].value;
-            const std::string memberName = tokens[i + 2].value;
-            values.push_back(getMemberNumericValue(symbolTable, objectName, memberName));
-            i += 2;
-            continue;
-        }
-
         if (
             isMethodCallStart(tokens, i)
         ) {
@@ -605,6 +1123,14 @@ inline double evaluateExpression(
             RuntimeValue callResult = executeMethodCallReadOnly(tokens, i, symbolTable);
             values.push_back(callResult.getNumberValue());
             i = callEnd;
+            continue;
+        }
+
+        if (isMemberAccessStart(tokens, i)) {
+            const std::string objectName = tokens[i].value;
+            const std::string memberName = tokens[i + 2].value;
+            values.push_back(getMemberNumericValue(symbolTable, objectName, memberName));
+            i += 2;
             continue;
         }
 
@@ -815,10 +1341,6 @@ inline RuntimeValue evaluateRuntimeExpression(
         }
     }
 
-    if (isMemberAccessStart(tokens, start) && start + 2 == end) {
-        return getMemberRuntimeValue(symbolTable, tokens[start].value, tokens[start + 2].value);
-    }
-
     if (
         isMethodCallStart(tokens, start)
     ) {
@@ -826,6 +1348,10 @@ inline RuntimeValue evaluateRuntimeExpression(
         if (callEnd == end) {
             return executeMethodCallReadOnly(tokens, start, symbolTable);
         }
+    }
+
+    if (isMemberAccessStart(tokens, start) && start + 2 == end) {
+        return getMemberRuntimeValue(symbolTable, tokens[start].value, tokens[start + 2].value);
     }
 
     if (
@@ -1007,7 +1533,7 @@ inline size_t executeMemberAssignment(
         tokens[start].type != TokenType::IDENTIFIER ||
         tokens[start + 1].type != TokenType::DOT ||
         tokens[start + 2].type != TokenType::IDENTIFIER ||
-        tokens[start + 3].type != TokenType::EQUAL
+        !isAssignmentOperatorToken(tokens[start + 3])
     ) {
         throw std::runtime_error("Invalid member assignment syntax");
     }
@@ -1028,22 +1554,23 @@ inline size_t executeMemberAssignment(
         throw std::runtime_error("Missing ';' at end of member assignment");
     }
 
-    const float value = static_cast<float>(evaluateExpression(tokens, start + 4, semicolonIndex - 1, symbolTable));
+    const std::string assignmentOp = tokens[start + 3].value;
+    const float rhsValue = static_cast<float>(evaluateExpression(tokens, start + 4, semicolonIndex - 1, symbolTable));
     RuntimeValue& obj = it->second;
     if (obj.typeName == "vec2") {
-        if (memberName == "x") obj.vec2Val.x = value;
-        else if (memberName == "y") obj.vec2Val.y = value;
+        if (memberName == "x") obj.vec2Val.x = static_cast<float>(applyScalarAssignmentOperator(obj.vec2Val.x, rhsValue, assignmentOp));
+        else if (memberName == "y") obj.vec2Val.y = static_cast<float>(applyScalarAssignmentOperator(obj.vec2Val.y, rhsValue, assignmentOp));
         else throw std::runtime_error("Unknown vec2 member: " + memberName);
     } else if (obj.typeName == "vec3") {
-        if (memberName == "x") obj.vec3Val.x = value;
-        else if (memberName == "y") obj.vec3Val.y = value;
-        else if (memberName == "z") obj.vec3Val.z = value;
+        if (memberName == "x") obj.vec3Val.x = static_cast<float>(applyScalarAssignmentOperator(obj.vec3Val.x, rhsValue, assignmentOp));
+        else if (memberName == "y") obj.vec3Val.y = static_cast<float>(applyScalarAssignmentOperator(obj.vec3Val.y, rhsValue, assignmentOp));
+        else if (memberName == "z") obj.vec3Val.z = static_cast<float>(applyScalarAssignmentOperator(obj.vec3Val.z, rhsValue, assignmentOp));
         else throw std::runtime_error("Unknown vec3 member: " + memberName);
     } else if (obj.typeName == "vec4") {
-        if (memberName == "x") obj.vec4Val.x = value;
-        else if (memberName == "y") obj.vec4Val.y = value;
-        else if (memberName == "z") obj.vec4Val.z = value;
-        else if (memberName == "w") obj.vec4Val.w = value;
+        if (memberName == "x") obj.vec4Val.x = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.x, rhsValue, assignmentOp));
+        else if (memberName == "y") obj.vec4Val.y = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.y, rhsValue, assignmentOp));
+        else if (memberName == "z") obj.vec4Val.z = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.z, rhsValue, assignmentOp));
+        else if (memberName == "w") obj.vec4Val.w = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.w, rhsValue, assignmentOp));
         else throw std::runtime_error("Unknown vec4 member: " + memberName);
     } else {
         throw std::runtime_error("Member assignment is only supported for vec types");
@@ -1063,7 +1590,7 @@ inline size_t executeAssignment(
 
     if (
         tokens[start].type != TokenType::IDENTIFIER ||
-        tokens[start + 1].type != TokenType::EQUAL
+        !isAssignmentOperatorToken(tokens[start + 1])
     ) {
         throw std::runtime_error("Invalid assignment syntax");
     }
@@ -1087,10 +1614,14 @@ inline size_t executeAssignment(
         throw std::runtime_error("Missing expression in assignment");
     }
 
+    const std::string assignmentOp = tokens[start + 1].value;
     const std::string varType = it->second.typeName;
-    if (varType == "string" && tokens[start + 2].type == TokenType::STRING) {
+    if (varType == "string" && tokens[start + 2].type == TokenType::STRING && assignmentOp == "=") {
         symbolTable[varName] = RuntimeValue(varType, tokens[start + 2].value);
     } else if (varType == "list" && tokens[start + 2].type == TokenType::LBRACKET) {
+        if (assignmentOp != "=") {
+            throw std::runtime_error("Compound assignment is not supported for list");
+        }
         RuntimeValue listVal(varType, "");
         listVal.type = GETypes::VariableType::LIST;
 
@@ -1115,11 +1646,19 @@ inline size_t executeAssignment(
 
         symbolTable[varName] = listVal;
     } else if (isVectorTypeName(varType)) {
-        RuntimeValue value = evaluateRuntimeExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
-        symbolTable[varName] = castRuntimeValueToType(value, varType);
+        RuntimeValue rhs = evaluateRuntimeExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
+        symbolTable[varName] = applyCompoundVectorAssignment(it->second, rhs, assignmentOp);
     } else {
-        const double value = evaluateExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
-        symbolTable[varName] = RuntimeValue(varType, value);
+        const double rhs = evaluateExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
+        const double lhs = it->second.getNumberValue();
+        const double assigned = applyScalarAssignmentOperator(lhs, rhs, assignmentOp);
+        if (varType == "int") {
+            symbolTable[varName] = RuntimeValue(varType, static_cast<double>(static_cast<int>(assigned)));
+        } else if (varType == "bool") {
+            symbolTable[varName] = RuntimeValue(varType, assigned != 0.0 ? 1.0 : 0.0);
+        } else {
+            symbolTable[varName] = RuntimeValue(varType, assigned);
+        }
     }
 
     return semicolonIndex + 1;
@@ -1146,15 +1685,21 @@ inline size_t executeMethodCallStatement(
         throw std::runtime_error("Missing ';' at end of method call");
     }
 
+    std::vector<RuntimeValue> args = parseArgumentList(tokens, start + 4, closeParen - 1, symbolTable);
+
+    if (objectName == "window") {
+        executeWindowMethodStatement(methodName, args);
+        return semicolonIndex + 1;
+    }
+
     auto objIt = symbolTable.find(objectName);
     if (objIt == symbolTable.end()) {
         throw std::runtime_error("Unknown object: " + objectName);
     }
     if (objIt->second.typeName != "list") {
-        throw std::runtime_error("Method calls currently supported only on list objects");
+        throw std::runtime_error("Method calls currently supported only on list objects and window");
     }
 
-    std::vector<RuntimeValue> args = parseArgumentList(tokens, start + 4, closeParen - 1, symbolTable);
     RuntimeValue& obj = objIt->second;
 
     if (methodName == "add") {
@@ -1193,6 +1738,7 @@ inline size_t executeMethodCallStatement(
 
 inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const std::vector<RuntimeValue>& args) {
     constexpr double kPi = 3.141593652589;
+    constexpr double kDegToRad = kPi / 180.0;
 
     if (funcName == "vec2") {
         if (args.size() == 1) {
@@ -1207,7 +1753,9 @@ inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const st
         }
         if (args.size() == 2) {
             RuntimeValue v = makeDefaultValueForType("vec2");
-            v.vec2Val = GETypes::Vec2Type(args[0].getNumberValue(), args[1].getNumberValue());
+            double x_val = args[0].getNumberValue();
+            double y_val = args[1].getNumberValue();
+            v.vec2Val = GETypes::Vec2Type(static_cast<float>(x_val), static_cast<float>(y_val));
             return v;
         }
         throw std::runtime_error("vec2 expects 1 or 2 arguments");
@@ -1284,20 +1832,32 @@ inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const st
         }
         if (args[0].typeName == "vec2") {
             RuntimeValue out = makeDefaultValueForType("vec2");
-            out.vec2Val = GETypes::Vec2Type(std::sin(args[0].vec2Val.x), std::sin(args[0].vec2Val.y));
+            out.vec2Val = GETypes::Vec2Type(
+                std::sin(args[0].vec2Val.x * kDegToRad),
+                std::sin(args[0].vec2Val.y * kDegToRad)
+            );
             return out;
         }
         if (args[0].typeName == "vec3") {
             RuntimeValue out = makeDefaultValueForType("vec3");
-            out.vec3Val = GETypes::Vec3Type(std::sin(args[0].vec3Val.x), std::sin(args[0].vec3Val.y), std::sin(args[0].vec3Val.z));
+            out.vec3Val = GETypes::Vec3Type(
+                std::sin(args[0].vec3Val.x * kDegToRad),
+                std::sin(args[0].vec3Val.y * kDegToRad),
+                std::sin(args[0].vec3Val.z * kDegToRad)
+            );
             return out;
         }
         if (args[0].typeName == "vec4") {
             RuntimeValue out = makeDefaultValueForType("vec4");
-            out.vec4Val = GETypes::Vec4Type(std::sin(args[0].vec4Val.x), std::sin(args[0].vec4Val.y), std::sin(args[0].vec4Val.z), std::sin(args[0].vec4Val.w));
+            out.vec4Val = GETypes::Vec4Type(
+                std::sin(args[0].vec4Val.x * kDegToRad),
+                std::sin(args[0].vec4Val.y * kDegToRad),
+                std::sin(args[0].vec4Val.z * kDegToRad),
+                std::sin(args[0].vec4Val.w * kDegToRad)
+            );
             return out;
         }
-        return RuntimeValue("float", std::sin(args[0].getNumberValue()));
+        return RuntimeValue("float", std::sin(args[0].getNumberValue() * kDegToRad));
     }
 
     if (funcName == "cos") {
@@ -1306,20 +1866,32 @@ inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const st
         }
         if (args[0].typeName == "vec2") {
             RuntimeValue out = makeDefaultValueForType("vec2");
-            out.vec2Val = GETypes::Vec2Type(std::cos(args[0].vec2Val.x), std::cos(args[0].vec2Val.y));
+            out.vec2Val = GETypes::Vec2Type(
+                std::cos(args[0].vec2Val.x * kDegToRad),
+                std::cos(args[0].vec2Val.y * kDegToRad)
+            );
             return out;
         }
         if (args[0].typeName == "vec3") {
             RuntimeValue out = makeDefaultValueForType("vec3");
-            out.vec3Val = GETypes::Vec3Type(std::cos(args[0].vec3Val.x), std::cos(args[0].vec3Val.y), std::cos(args[0].vec3Val.z));
+            out.vec3Val = GETypes::Vec3Type(
+                std::cos(args[0].vec3Val.x * kDegToRad),
+                std::cos(args[0].vec3Val.y * kDegToRad),
+                std::cos(args[0].vec3Val.z * kDegToRad)
+            );
             return out;
         }
         if (args[0].typeName == "vec4") {
             RuntimeValue out = makeDefaultValueForType("vec4");
-            out.vec4Val = GETypes::Vec4Type(std::cos(args[0].vec4Val.x), std::cos(args[0].vec4Val.y), std::cos(args[0].vec4Val.z), std::cos(args[0].vec4Val.w));
+            out.vec4Val = GETypes::Vec4Type(
+                std::cos(args[0].vec4Val.x * kDegToRad),
+                std::cos(args[0].vec4Val.y * kDegToRad),
+                std::cos(args[0].vec4Val.z * kDegToRad),
+                std::cos(args[0].vec4Val.w * kDegToRad)
+            );
             return out;
         }
-        return RuntimeValue("float", std::cos(args[0].getNumberValue()));
+        return RuntimeValue("float", std::cos(args[0].getNumberValue() * kDegToRad));
     }
 
     if (funcName == "tan") {
@@ -1328,20 +1900,32 @@ inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const st
         }
         if (args[0].typeName == "vec2") {
             RuntimeValue out = makeDefaultValueForType("vec2");
-            out.vec2Val = GETypes::Vec2Type(std::tan(args[0].vec2Val.x), std::tan(args[0].vec2Val.y));
+            out.vec2Val = GETypes::Vec2Type(
+                std::tan(args[0].vec2Val.x * kDegToRad),
+                std::tan(args[0].vec2Val.y * kDegToRad)
+            );
             return out;
         }
         if (args[0].typeName == "vec3") {
             RuntimeValue out = makeDefaultValueForType("vec3");
-            out.vec3Val = GETypes::Vec3Type(std::tan(args[0].vec3Val.x), std::tan(args[0].vec3Val.y), std::tan(args[0].vec3Val.z));
+            out.vec3Val = GETypes::Vec3Type(
+                std::tan(args[0].vec3Val.x * kDegToRad),
+                std::tan(args[0].vec3Val.y * kDegToRad),
+                std::tan(args[0].vec3Val.z * kDegToRad)
+            );
             return out;
         }
         if (args[0].typeName == "vec4") {
             RuntimeValue out = makeDefaultValueForType("vec4");
-            out.vec4Val = GETypes::Vec4Type(std::tan(args[0].vec4Val.x), std::tan(args[0].vec4Val.y), std::tan(args[0].vec4Val.z), std::tan(args[0].vec4Val.w));
+            out.vec4Val = GETypes::Vec4Type(
+                std::tan(args[0].vec4Val.x * kDegToRad),
+                std::tan(args[0].vec4Val.y * kDegToRad),
+                std::tan(args[0].vec4Val.z * kDegToRad),
+                std::tan(args[0].vec4Val.w * kDegToRad)
+            );
             return out;
         }
-        return RuntimeValue("float", std::tan(args[0].getNumberValue()));
+        return RuntimeValue("float", std::tan(args[0].getNumberValue() * kDegToRad));
     }
 
     if (funcName == "length") {
@@ -1919,7 +2503,7 @@ inline size_t parseFunctionDef(const std::vector<Token>& tokens, size_t start) {
     return bodyEnd + 1;
 }
 
-inline ReturnValue executeFunction(const std::string& funcName, const std::vector<RuntimeValue>& args, const std::vector<Token>& tokens, const std::unordered_map<std::string, RuntimeValue>& globalSymbolTable) {
+inline ReturnValue executeFunction(const std::string& funcName, const std::vector<RuntimeValue>& args, const std::vector<Token>& tokens, std::unordered_map<std::string, RuntimeValue>& globalSymbolTable) {
     auto funcIt = functions.find(funcName);
     if (funcIt == functions.end()) {
         throw std::runtime_error("Unknown function: " + funcName);
@@ -1932,9 +2516,27 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
     
     // Create local scope with parameters
     std::unordered_map<std::string, RuntimeValue> localSymbolTable = globalSymbolTable;
+    std::unordered_set<std::string> parameterNames;
+    parameterNames.reserve(func.parameters.size());
     for (size_t i = 0; i < args.size(); i++) {
         localSymbolTable[func.parameters[i].name] = args[i];
+        parameterNames.insert(func.parameters[i].name);
     }
+
+    std::unordered_set<std::string> locallyDeclared;
+
+    auto writeBackToParentScope = [&]() {
+        for (const auto& entry : localSymbolTable) {
+            const std::string& name = entry.first;
+            if (parameterNames.count(name) != 0 || locallyDeclared.count(name) != 0) {
+                continue;
+            }
+            auto parentIt = globalSymbolTable.find(name);
+            if (parentIt != globalSymbolTable.end()) {
+                parentIt->second = entry.second;
+            }
+        }
+    };
     
     // Use the function's stored body tokens instead of the global tokens
     const std::vector<Token>& bodyTokens = func.bodyTokens;
@@ -1952,6 +2554,7 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
             
             // Evaluate return value
             if (semi == i) {
+                writeBackToParentScope();
                 return ReturnValue();
             }
             
@@ -1963,6 +2566,7 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
             else if (bodyTokens[i].type == TokenType::IDENTIFIER && semi == i + 1) {
                 auto it = localSymbolTable.find(bodyTokens[i].value);
                 if (it != localSymbolTable.end()) {
+                    writeBackToParentScope();
                     return ReturnValue(it->second);
                 }
             }
@@ -1970,13 +2574,18 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
             // Try to evaluate as expression
             if (semi > i) {
                 double result = evaluateExpression(bodyTokens, i, semi - 1, localSymbolTable);
+                writeBackToParentScope();
                 return ReturnValue(RuntimeValue(func.returnType, result));
             }
             
+            writeBackToParentScope();
             return ReturnValue();
         }
         
         if (bodyTokens[i].type == TokenType::TYPE) {
+            if (i + 1 < bodyTokens.size() && bodyTokens[i + 1].type == TokenType::IDENTIFIER) {
+                locallyDeclared.insert(bodyTokens[i + 1].value);
+            }
             i = executeDeclaration(bodyTokens, i, localSymbolTable);
             continue;
         }
@@ -2021,6 +2630,8 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
         
         i++;
     }
+
+    writeBackToParentScope();
     
     // If no explicit return, return default value
     if (func.returnType == "int" || func.returnType == "float") {
@@ -2032,7 +2643,7 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
     return ReturnValue();
 }
 
-inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start, const std::unordered_map<std::string, RuntimeValue>& symbolTable) {
+inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start, std::unordered_map<std::string, RuntimeValue>& symbolTable) {
     // Format: funcName(arg1, arg2, ...)
     std::string funcName = tokens[start].value;
     
@@ -2094,6 +2705,11 @@ inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start,
     }
     
     return RuntimeValue();
+}
+
+inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start, const std::unordered_map<std::string, RuntimeValue>& symbolTable) {
+    std::unordered_map<std::string, RuntimeValue> tempSymbolTable = symbolTable;
+    return callFunction(tokens, start, tempSymbolTable);
 }
 
 // Forward declarations
@@ -2165,14 +2781,14 @@ inline size_t executeIf(
             } else if (
                 tokens[i].type == TokenType::IDENTIFIER &&
                 i + 1 < tokens.size() &&
-                tokens[i + 1].type == TokenType::EQUAL
+                isAssignmentOperatorToken(tokens[i + 1])
             ) {
                 i = executeAssignment(tokens, i, symbolTable);
             } else if (
                 tokens[i].type == TokenType::IDENTIFIER &&
                 i + 3 < tokens.size() &&
                 tokens[i + 1].type == TokenType::DOT &&
-                tokens[i + 3].type == TokenType::EQUAL
+                isAssignmentOperatorToken(tokens[i + 3])
             ) {
                 i = executeMemberAssignment(tokens, i, symbolTable);
             } else if (isMethodCallStart(tokens, i)) {
@@ -2214,14 +2830,14 @@ inline size_t executeIf(
                 } else if (
                     tokens[i].type == TokenType::IDENTIFIER &&
                     i + 1 < tokens.size() &&
-                    tokens[i + 1].type == TokenType::EQUAL
+                    isAssignmentOperatorToken(tokens[i + 1])
                 ) {
                     i = executeAssignment(tokens, i, symbolTable);
                 } else if (
                     tokens[i].type == TokenType::IDENTIFIER &&
                     i + 3 < tokens.size() &&
                     tokens[i + 1].type == TokenType::DOT &&
-                    tokens[i + 3].type == TokenType::EQUAL
+                    isAssignmentOperatorToken(tokens[i + 3])
                 ) {
                     i = executeMemberAssignment(tokens, i, symbolTable);
                 } else if (isMethodCallStart(tokens, i)) {
@@ -2294,14 +2910,14 @@ inline size_t executeWhile(
             } else if (
                 tokens[i].type == TokenType::IDENTIFIER &&
                 i + 1 < tokens.size() &&
-                tokens[i + 1].type == TokenType::EQUAL
+                isAssignmentOperatorToken(tokens[i + 1])
             ) {
                 i = executeAssignment(tokens, i, symbolTable);
             } else if (
                 tokens[i].type == TokenType::IDENTIFIER &&
                 i + 3 < tokens.size() &&
                 tokens[i + 1].type == TokenType::DOT &&
-                tokens[i + 3].type == TokenType::EQUAL
+                isAssignmentOperatorToken(tokens[i + 3])
             ) {
                 i = executeMemberAssignment(tokens, i, symbolTable);
             } else if (isMethodCallStart(tokens, i)) {
@@ -2382,14 +2998,14 @@ inline size_t executeFor(
             } else if (
                 tokens[i].type == TokenType::IDENTIFIER &&
                 i + 1 < tokens.size() &&
-                tokens[i + 1].type == TokenType::EQUAL
+                isAssignmentOperatorToken(tokens[i + 1])
             ) {
                 i = executeAssignment(tokens, i, symbolTable);
             } else if (
                 tokens[i].type == TokenType::IDENTIFIER &&
                 i + 3 < tokens.size() &&
                 tokens[i + 1].type == TokenType::DOT &&
-                tokens[i + 3].type == TokenType::EQUAL
+                isAssignmentOperatorToken(tokens[i + 3])
             ) {
                 i = executeMemberAssignment(tokens, i, symbolTable);
             } else if (isMethodCallStart(tokens, i)) {
@@ -2481,16 +3097,25 @@ inline size_t executeFor(
                 }
             } else if (tokens[secondSemi + 1].type == TokenType::IDENTIFIER && 
                 secondSemi + 2 < tokens.size() && 
-                tokens[secondSemi + 2].type == TokenType::EQUAL) {
+                isAssignmentOperatorToken(tokens[secondSemi + 2])) {
                 // This is an assignment: var = expr
                 std::string varName = tokens[secondSemi + 1].value;
-                double newValue = evaluateExpression(tokens, secondSemi + 3, closeParen - 1, symbolTable);
+                double rhsValue = evaluateExpression(tokens, secondSemi + 3, closeParen - 1, symbolTable);
+                const std::string op = tokens[secondSemi + 2].value;
                 
                 // Get the variable type
                 auto it = symbolTable.find(varName);
                 if (it != symbolTable.end()) {
                     std::string varType = it->second.typeName;
-                    symbolTable[varName] = RuntimeValue(varType, newValue);
+                    double lhsValue = it->second.getNumberValue();
+                    double newValue = applyScalarAssignmentOperator(lhsValue, rhsValue, op);
+                    if (varType == "int") {
+                        symbolTable[varName] = RuntimeValue(varType, static_cast<double>(static_cast<int>(newValue)));
+                    } else if (varType == "bool") {
+                        symbolTable[varName] = RuntimeValue(varType, newValue != 0.0 ? 1.0 : 0.0);
+                    } else {
+                        symbolTable[varName] = RuntimeValue(varType, newValue);
+                    }
                 }
             } else {
                 // Just evaluate as expression
@@ -2561,6 +3186,11 @@ inline size_t executeImport(
     for (size_t i = filenameStart; i < filenameEnd; i++) {
         filename += tokens[i].value;
     }
+
+    if (filename == "window") {
+        importedFiles.insert(filename);
+        return filenameEnd + 1;
+    }
     
     // Check if already imported
     if (importedFiles.find(filename) != importedFiles.end()) {
@@ -2576,7 +3206,14 @@ inline size_t executeImport(
     std::vector<Token> importedTokens = tokenize(source);
     
     // Execute the imported file's tokens to populate symbol table and functions
-    executeProgram(importedTokens);
+    std::unordered_map<std::string, RuntimeValue> importedSymbolTable = executeProgram(importedTokens);
+    
+    // Merge imported variables and functions into the caller's symbol table
+    for (const auto& pair : importedSymbolTable) {
+        if (symbolTable.find(pair.first) == symbolTable.end()) {
+            symbolTable[pair.first] = pair.second;
+        }
+    }
     
     return filenameEnd + 1;
 }
@@ -2660,7 +3297,7 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
         if (
             tokens[i].type == TokenType::IDENTIFIER &&
             i + 1 < tokens.size() &&
-            tokens[i + 1].type == TokenType::EQUAL
+            isAssignmentOperatorToken(tokens[i + 1])
         ) {
             i = executeAssignment(tokens, i, symbolTable);
             continue;
@@ -2670,7 +3307,7 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
             tokens[i].type == TokenType::IDENTIFIER &&
             i + 3 < tokens.size() &&
             tokens[i + 1].type == TokenType::DOT &&
-            tokens[i + 3].type == TokenType::EQUAL
+            isAssignmentOperatorToken(tokens[i + 3])
         ) {
             i = executeMemberAssignment(tokens, i, symbolTable);
             continue;

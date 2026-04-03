@@ -158,6 +158,32 @@ inline bool isVectorTypeName(const std::string& typeName) {
     return typeName == "vec2" || typeName == "vec3" || typeName == "vec4";
 }
 
+inline RuntimeValue negateRuntimeValue(const RuntimeValue& value) {
+    if (value.typeName == "int") {
+        return RuntimeValue("int", -value.getNumberValue());
+    }
+    if (value.typeName == "float") {
+        return RuntimeValue("float", -value.getNumberValue());
+    }
+    if (value.typeName == "vec2") {
+        RuntimeValue out("vec2", 0.0);
+        out.vec2Val = GETypes::Vec2Type(-value.vec2Val.x, -value.vec2Val.y);
+        return out;
+    }
+    if (value.typeName == "vec3") {
+        RuntimeValue out("vec3", 0.0);
+        out.vec3Val = GETypes::Vec3Type(-value.vec3Val.x, -value.vec3Val.y, -value.vec3Val.z);
+        return out;
+    }
+    if (value.typeName == "vec4") {
+        RuntimeValue out("vec4", 0.0);
+        out.vec4Val = GETypes::Vec4Type(-value.vec4Val.x, -value.vec4Val.y, -value.vec4Val.z, -value.vec4Val.w);
+        return out;
+    }
+
+    throw std::runtime_error("Unary minus is not supported for type: " + value.typeName);
+}
+
 inline RuntimeValue makeDefaultValueForType(const std::string& typeName) {
     RuntimeValue v;
     v.typeName = typeName;
@@ -1097,6 +1123,15 @@ inline double evaluateExpression(
     size_t end,
     const std::unordered_map<std::string, RuntimeValue>& symbolTable
 ) {
+    if (
+        start < end &&
+        tokens[start].type == TokenType::OPERATOR &&
+        (tokens[start].value == "-" || tokens[start].value == "+")
+    ) {
+        const double value = evaluateExpression(tokens, start + 1, end, symbolTable);
+        return tokens[start].value == "-" ? -value : value;
+    }
+
     std::vector<double> values;
     std::vector<std::string> ops;
     if (end >= start) {
@@ -1322,6 +1357,18 @@ inline RuntimeValue evaluateRuntimeExpression(
 ) {
     if (start > end) {
         throw std::runtime_error("Empty expression");
+    }
+
+    if (
+        start < end &&
+        tokens[start].type == TokenType::OPERATOR &&
+        (tokens[start].value == "-" || tokens[start].value == "+")
+    ) {
+        RuntimeValue value = evaluateRuntimeExpression(tokens, start + 1, end, symbolTable);
+        if (tokens[start].value == "-") {
+            return negateRuntimeValue(value);
+        }
+        return value;
     }
 
     if (start == end) {

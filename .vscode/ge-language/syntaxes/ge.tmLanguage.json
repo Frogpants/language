@@ -1,0 +1,193 @@
+{
+  "name": "GE",
+  "scopeName": "source.ge",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#importPath"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.ge",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.ge",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.ge",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "importPath": {
+      "patterns": [
+        {
+          "name": "meta.import.ge",
+          "begin": "\\b(import)\\s*(<)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.import.ge"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.ge"
+            }
+          },
+          "end": "(>)",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.string.end.ge"
+            }
+          },
+          "patterns": [
+            {
+              "name": "string.quoted.other.ge",
+              "match": "[^>]+"
+            }
+          ]
+        }
+      ]
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "name": "meta.declaration.ge",
+          "match": "\\b(void|int|float|string|list|bool|vec2|vec3|vec4)\\b\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.ge"
+            },
+            "2": {
+              "name": "variable.other.definition.ge"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "storage.type.ge",
+          "match": "\\b(void|int|float|string|list|bool|vec2|vec3|vec4)\\b"
+        },
+        {
+          "name": "keyword.control.ge",
+          "match": "\\b(if|else|for|while)\\b"
+        },
+        {
+          "name": "keyword.control.return.ge",
+          "match": "\\b(return)\\b"
+        },
+        {
+          "name": "support.function.ge",
+          "match": "\\b(print)\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.ge",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.ge",
+          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.ge",
+          "match": "\\+|-|\\*|/|%|\\^"
+        },
+        {
+          "name": "keyword.operator.comparison.ge",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.ge",
+          "match": "="
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.ge",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.comma.ge",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.block.begin.ge",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.block.end.ge",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.section.parens.begin.ge",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.ge",
+          "match": "\\)"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.ge",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

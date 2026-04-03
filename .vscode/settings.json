@@ -1,0 +1,93 @@
+{
+  "files.associations": {
+    "*.ge": "ge"
+  },
+  "[ge]": {
+    "editor.semanticHighlighting.enabled": false
+  },
+  "editor.semanticHighlighting.enabled": true,
+  "editor.semanticTokenColorCustomizations": {
+    "enabled": true,
+    "rules": {
+      "keyword:ge": "#64a2f9",
+      "type:ge": "#70c1e4",
+      "operator:ge": "#d7ba7d",
+      "variable:ge": "#9CDCFE"
+    }
+  },
+  "editor.tokenColorCustomizations": {
+    "textMateRules": [
+      {
+        "scope": [
+          "source.ge comment.line.double-slash.ge",
+          "source.ge punctuation.definition.comment"
+        ],
+        "settings": {
+          "foreground": "#6A9955"
+        }
+      },
+      {
+        "scope": [
+          "source.ge string.quoted.double.ge",
+          "source.ge constant.character.escape.ge",
+          "source.ge string.quoted.other.ge",
+          "source.ge punctuation.definition.string.begin.ge",
+          "source.ge punctuation.definition.string.end.ge"
+        ],
+        "settings": {
+          "foreground": "#CE9178"
+        }
+      },
+      {
+        "scope": [
+          "source.ge constant.numeric.ge",
+          "source.ge constant.language.boolean.ge"
+        ],
+        "settings": {
+          "foreground": "#a2c8f7"
+        }
+      },
+      {
+        "scope": [
+          "source.ge storage.type.ge"
+        ],
+        "settings": {
+          "foreground": "#569CD6"
+        }
+      },
+      {
+        "scope": [
+          "source.ge keyword.operator.ge"
+        ],
+        "settings": {
+          "foreground": "#DCDCDC"
+        }
+      },
+      {
+        "scope": [
+          "source.ge keyword.control.return.ge"
+        ],
+        "settings": {
+          "foreground": "#C586C0"
+        }
+      },
+      {
+        "scope": [
+          "source.ge keyword.control.import.ge"
+        ],
+        "settings": {
+          "foreground": "#C586C0"
+        }
+      },
+      {
+        "scope": [
+          "source.ge variable.other.ge",
+          "source.ge variable.other.definition.ge"
+        ],
+        "settings": {
+          "foreground": "#9CDCFE"
+        }
+      }
+    ]
+  }
+}

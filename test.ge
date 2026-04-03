@@ -1,0 +1,19 @@
+
+import <perlin.ge>
+
+// 3D Engine Test
+
+vec3 cam = vec3(0.0, 0.0, 0.0);
+vec3 rot = vec3(0.0, 0.0, 0.0);
+
+float FOV = 90.0;
+float f = 0.0;
+
+vec2 goTo(vec3 pos) {
+    vec3 p = pos - cam;
+    print(p);
+    p = vec3(p.x * cos(rot.x) - p.z * sin(rot.x), pos.y, p.x * sin(rot.x) + p.z * cos(rot.x));
+    p = vec3(p.x, p.y * cos(rot.y) - p.z * sin(rot.y), p.y * sin(rot.y) + p.z * cos(rot.y));
+    return vec2(f*(p.x/p.z), f*(p.y/p.z));
+}
+

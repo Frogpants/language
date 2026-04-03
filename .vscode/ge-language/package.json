@@ -1,0 +1,35 @@
+{
+  "name": "ge-language-support",
+  "displayName": "GE Language Support",
+  "description": "Grammar and editor support for .ge files",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "*"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ge",
+        "aliases": [
+          "GE",
+          "ge"
+        ],
+        "extensions": [
+          ".ge"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ge",
+        "scopeName": "source.ge",
+        "path": "./syntaxes/ge.tmLanguage.json"
+      }
+    ]
+  }
+}

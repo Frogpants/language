@@ -23,7 +23,7 @@ g++ -std=c++17 interpreter/run.cpp -o run
 
 Imports use angle brackets and do not require a semicolon.
 
-~~~ge
+~~~cpp
 import <perlin.ge>
 import <math/helpers.ge>
 ~~~
@@ -37,7 +37,7 @@ Import behavior:
 
 Line comments are supported:
 
-~~~ge
+~~~cpp
 // this is a comment
 ~~~
 
@@ -56,7 +56,7 @@ Built-in variable types:
 
 Examples:
 
-~~~ge
+~~~cpp
 int i = 10;
 float f = 3.14;
 float n = -2.5;
@@ -77,20 +77,20 @@ vec4 c = vec4(1.0, 2.0, 3.0, 4.0);
 ## Operators
 
 Arithmetic:
-- +
-- -
-- *
-- /
-- %
-- ^
+- `+`
+- `-`
+- `*`
+- `/`
+- `%`
+- `^`
 
 Comparison:
-- ==
-- !=
-- <
-- <=
-- >
-- >=
+- `==`
+- `!=`
+- `<`
+- `<=`
+- `>`
+- `>=`
 
 ## Statements
 
@@ -98,7 +98,7 @@ Comparison:
 
 Semicolon required.
 
-~~~ge
+~~~cpp
 float x = 1.0;
 vec3 p = vec3(0.0, 1.0, 2.0);
 list vals = [1, 2, 3];
@@ -108,7 +108,7 @@ list vals = [1, 2, 3];
 
 Semicolon required.
 
-~~~ge
+~~~cpp
 x = x + 1.0;
 p = p + vec3(1.0, 0.0, 0.0);
 ~~~
@@ -117,7 +117,7 @@ p = p + vec3(1.0, 0.0, 0.0);
 
 Semicolon required.
 
-~~~ge
+~~~cpp
 p.x = 5.0;
 p.y = p.y + 1.0;
 ~~~
@@ -126,7 +126,7 @@ p.y = p.y + 1.0;
 
 Parentheses required. Semicolon required.
 
-~~~ge
+~~~cpp
 print("hello");
 print(x);
 print(p);
@@ -136,7 +136,7 @@ print(p);
 
 Semicolon required.
 
-~~~ge
+~~~cpp
 updatePlayer(pos);
 ~~~
 
@@ -144,7 +144,7 @@ updatePlayer(pos);
 
 ### If / Else
 
-~~~ge
+~~~cpp
 if (x > 0.0) {
 	print("positive");
 } else {
@@ -154,7 +154,7 @@ if (x > 0.0) {
 
 ### While
 
-~~~ge
+~~~cpp
 while (x < 10.0) {
 	x = x + 1.0;
 }
@@ -167,7 +167,7 @@ Current for-loop format:
 - Initialization is currently expected as a typed declaration.
 - Increment supports ++i, i++, --i, i--, and assignment-style forms.
 
-~~~ge
+~~~cpp
 for (int i = 0; i < 10; i++) {
 	print(i);
 }
@@ -177,7 +177,7 @@ for (int i = 0; i < 10; i++) {
 
 Function definitions are typed and do not use a function keyword.
 
-~~~ge
+~~~cpp
 float add(float a, float b) {
 	return a + b;
 }
@@ -203,7 +203,7 @@ Supported constructors and operations:
 
 Example:
 
-~~~ge
+~~~cpp
 vec3 cam = vec3(0.0, 0.0, 0.0);
 vec3 pos = vec3(5.0, 2.0, 8.0);
 vec3 p = pos - cam;
@@ -214,7 +214,7 @@ print(p);
 
 List literals:
 
-~~~ge
+~~~cpp
 list nums = [1, 2, 3];
 ~~~
 
@@ -230,7 +230,7 @@ List methods currently supported:
 
 Examples:
 
-~~~ge
+~~~cpp
 list nums = [1, 2, 3];
 nums.add(4);
 nums.remove(0);
@@ -276,7 +276,7 @@ Constructors and math helpers currently available:
 
 ## Example Program
 
-~~~ge
+~~~cpp
 import <perlin.ge>
 
 float add(float a, float b) {

@@ -18,7 +18,7 @@ vec2 goto(vec3 pos) {
     vec3 p = pos - cam;
     p = point(p.x * cos(rot.x) - p.z * sin(rot.x), p.y, p.x * sin(rot.x) + p.z * cos(rot.x));
     p = point(p.x, p.y * cos(rot.y) - p.z * sin(rot.y), p.y * sin(rot.y) + p.z * cos(rot.y));
-    p.z = max(0.1, p.z);
+    p = point(p.x, p.y, max(1.0, p.z));
     float x = f * (p.x / p.z);
     float y = f * (p.y / p.z);
     vec2 result;
@@ -27,3 +27,4 @@ vec2 goto(vec3 pos) {
     return result;
 }
 
+print("camera.ge loaded");

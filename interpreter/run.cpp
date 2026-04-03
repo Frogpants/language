@@ -16,7 +16,11 @@ int main(int argc, char* argv[])
         runInterpreter(source);
         return 0;
     } catch (const std::exception& ex) {
-        std::cerr << "Runtime error: " << ex.what() << "\n";
+        if (CurrentToken.line > 0) {
+            std::cerr << "Runtime error on line " << CurrentToken.line << ": " << ex.what() << "\n";
+        } else {
+            std::cerr << "Runtime error: " << ex.what() << "\n";
+        }
         return 1;
     }
 }

@@ -42,6 +42,8 @@ enum class SymbolType {
 struct Token {
     TokenType type;
     std::string value;
+    size_t line = 1;
+    size_t column = 1;
 };
 
 struct GrammarSymbol {

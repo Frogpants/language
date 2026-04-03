@@ -1,8 +1,11 @@
 import <window>
 import <camera.ge>
+import <perlin.ge>
 
 window.create(1280, 720, "GE Window Demo");
 window.setTitle("Hello World");
+
+window.setFPS(60);
 
 vec3 pos = vec3(0.0, 0.0, 0.0);
 vec3 vel = vec3(0.0, 0.0, 0.0);
@@ -12,6 +15,34 @@ vec3 angle = vec3(0.0, 0.0, 0.0);
 void move(float speed) {
     vel.x += speed * sin(angle.x);
     vel.z += speed * cos(angle.x);
+}
+
+vec2 point2(float x, float y) {
+    vec2 p;
+    p.x = x;
+    p.y = y;
+    return p;
+}
+
+list height = [];
+int worldSize = 10;
+
+void genWorld(int size) {
+    float y1 = 0.0;
+    for(int yi = 0; yi < size; ++yi) {
+        float x1 = 0.0;
+        for(int xi = 0; xi < size; ++xi) {
+            height.add(10.0 * perlin(point2(x1, y1)));
+            x1 += 1.0;
+        }
+        y1 += 1.0;
+    }
+}
+
+genWorld(worldSize);
+
+float findID(int x, int y) {
+    return (y * worldSize) + x;
 }
 
 while (window.isOpen()) {
@@ -43,10 +74,35 @@ while (window.isOpen()) {
 
 	// window.drawRect(pos.x, pos.y, 25, 25, 0.3, 0.7, 1.0, 1.0);
 
-    f = 1280.0 / tan(FOV / 2.0);
+    f = 640.0 / tan(FOV / 2.0);
 
     cam = pos;
     rot = angle;
+
+    float x = 0.0;
+    float y = 0.0;
+    float z = 0.0;
+
+    for(int i = 0; i < worldSize; ++i) {
+        x = 0.0;
+        for(int j = 0; j < worldSize; ++j) {
+            int id = findID(j, i);
+            vec3 p = point(x, 0.1 * y - 5.0, z);
+            y = height.get(id);
+
+            float dist = length(p - cam);
+            float size = 8 / (dist * 0.05);
+            size = max(1.0, size);
+            float col = 1.0 - (dist * 0.1);
+            //col = min(1.0, max(0.0, col));
+            col = clamp(0.0, 1.0, col);
+
+            vec2 screenPos = goto(p);
+            window.drawRect(screenPos.x, screenPos.y, size, size, 1.0, 1.0, 1.0, col);
+            x += 1.0;
+        }
+        z += 1.0;
+    }
 
     vec2 a = goto(vec3(-50.0, -50.0, 100));
     vec2 b = goto(vec3(-50.0, -50.0, 200));
@@ -62,10 +118,10 @@ while (window.isOpen()) {
 	window.drawCircle(0, 0, 2, 1.0, 1.0, 1.0, 1.0);
 
 
-	window.drawLine(-500, 300, 500, 300, 3, 0.8, 0.8, 0.2, 1.0);
+	window.drawLine(-500, 300, 500, 300, 3, 1.0, 1.0, 1.0, 1.0);
 	window.drawText("Move mouse and close window to exit", -120, 340, 36);
 
 
 	window.endFrame();
-	window.sleep(16);
+	// window.sleep(16);
 }

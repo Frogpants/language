@@ -537,6 +537,9 @@ struct WindowState {
     std::set<int> mouseButtonsDown;
     int queuedDrawCommands = 0;
     bool frameCleared = false;
+    int targetFPS = 0;
+    std::chrono::steady_clock::time_point frameStartTime;
+    bool frameStartValid = false;
     NativeWindowBackend backend;
 };
 
@@ -736,6 +739,9 @@ inline RuntimeValue executeWindowMethodReadOnly(const std::string& methodName, c
     if (methodName == "drawCount") {
         return RuntimeValue("int", static_cast<double>(windowState.queuedDrawCommands));
     }
+    if (methodName == "fps") {
+        return RuntimeValue("int", static_cast<double>(windowState.targetFPS));
+    }
     if (methodName == "keyDown") {
         if (args.size() != 1) {
             throw std::runtime_error("window.keyDown expects exactly 1 argument");
@@ -818,6 +824,8 @@ inline void executeWindowMethodStatement(const std::string& methodName, const st
     if (methodName == "beginFrame") {
         windowState.queuedDrawCommands = 0;
         windowState.frameCleared = false;
+        windowState.frameStartTime = std::chrono::steady_clock::now();
+        windowState.frameStartValid = true;
         windowState.backend.pumpEvents(
             windowState.shouldClose,
             windowState.width,
@@ -836,6 +844,16 @@ inline void executeWindowMethodStatement(const std::string& methodName, const st
             }
             windowState.backend.endFrame(windowState.width, windowState.height);
         }
+
+        if (windowState.targetFPS > 0 && windowState.frameStartValid) {
+            const auto targetFrameDuration = std::chrono::milliseconds(1000 / windowState.targetFPS);
+            const auto elapsed = std::chrono::steady_clock::now() - windowState.frameStartTime;
+            if (elapsed < targetFrameDuration) {
+                std::this_thread::sleep_for(targetFrameDuration - elapsed);
+            }
+            windowState.frameStartValid = false;
+        }
+
         windowState.backend.pumpEvents(
             windowState.shouldClose,
             windowState.width,
@@ -927,6 +945,154 @@ inline void executeWindowMethodStatement(const std::string& methodName, const st
         windowState.queuedDrawCommands++;
         return;
     }
+    if (methodName == "drawTri") {
+        const bool numericSignature = (args.size() == 11);
+        const bool vec2Signature = (
+            args.size() == 8 &&
+            args[0].typeName == "vec2" &&
+            args[1].typeName == "vec2" &&
+            args[2].typeName == "vec2"
+        );
+
+        if (!numericSignature && !vec2Signature) {
+            throw std::runtime_error("window.drawTri expects either (x1, y1, x2, y2, x3, y3, thickness, r, g, b, a) or (vec2 a, vec2 b, vec2 c, thickness, r, g, b, a)");
+        }
+
+        if (windowState.created) {
+            int x1 = 0;
+            int y1 = 0;
+            int x2 = 0;
+            int y2 = 0;
+            int x3 = 0;
+            int y3 = 0;
+            int thickness = 1;
+            float r = 1.0f;
+            float g = 1.0f;
+            float b = 1.0f;
+
+            if (numericSignature) {
+                x1 = centeredToWindowPixelX(args[0].getNumberValue());
+                y1 = centeredToWindowPixelY(args[1].getNumberValue());
+                x2 = centeredToWindowPixelX(args[2].getNumberValue());
+                y2 = centeredToWindowPixelY(args[3].getNumberValue());
+                x3 = centeredToWindowPixelX(args[4].getNumberValue());
+                y3 = centeredToWindowPixelY(args[5].getNumberValue());
+                thickness = std::max(1, static_cast<int>(args[6].getNumberValue()));
+                r = static_cast<float>(args[7].getNumberValue());
+                g = static_cast<float>(args[8].getNumberValue());
+                b = static_cast<float>(args[9].getNumberValue());
+            } else {
+                x1 = centeredToWindowPixelX(static_cast<double>(args[0].vec2Val.x));
+                y1 = centeredToWindowPixelY(static_cast<double>(args[0].vec2Val.y));
+                x2 = centeredToWindowPixelX(static_cast<double>(args[1].vec2Val.x));
+                y2 = centeredToWindowPixelY(static_cast<double>(args[1].vec2Val.y));
+                x3 = centeredToWindowPixelX(static_cast<double>(args[2].vec2Val.x));
+                y3 = centeredToWindowPixelY(static_cast<double>(args[2].vec2Val.y));
+                thickness = std::max(1, static_cast<int>(args[3].getNumberValue()));
+                r = static_cast<float>(args[4].getNumberValue());
+                g = static_cast<float>(args[5].getNumberValue());
+                b = static_cast<float>(args[6].getNumberValue());
+            }
+
+            windowState.backend.drawTriangle(
+                x1,
+                y1,
+                x2,
+                y2,
+                x3,
+                y3,
+                thickness,
+                r,
+                g,
+                b
+            );
+        }
+        windowState.queuedDrawCommands++;
+        return;
+    }
+    if (methodName == "drawPoly") {
+        if (args.size() != 6 || args[0].typeName != "list") {
+            throw std::runtime_error("window.drawPoly expects (list points, thickness, r, g, b, a)");
+        }
+
+        const auto& listPoints = args[0].listVal.elements;
+        if (listPoints.size() < 2) {
+            throw std::runtime_error("window.drawPoly expects at least 2 points");
+        }
+
+        std::vector<std::pair<int, int>> points;
+        points.reserve(listPoints.size());
+        bool hasPendingX = false;
+        double pendingX = 0.0;
+        for (const auto& p : listPoints) {
+            if (std::holds_alternative<GETypes::Vec2Type>(p)) {
+                const auto& v = std::get<GETypes::Vec2Type>(p);
+                points.push_back({
+                    centeredToWindowPixelX(static_cast<double>(v.x)),
+                    centeredToWindowPixelY(static_cast<double>(v.y))
+                });
+                continue;
+            }
+            if (std::holds_alternative<GETypes::Vec3Type>(p)) {
+                const auto& v = std::get<GETypes::Vec3Type>(p);
+                points.push_back({
+                    centeredToWindowPixelX(static_cast<double>(v.x)),
+                    centeredToWindowPixelY(static_cast<double>(v.y))
+                });
+                continue;
+            }
+            if (std::holds_alternative<GETypes::Vec4Type>(p)) {
+                const auto& v = std::get<GETypes::Vec4Type>(p);
+                points.push_back({
+                    centeredToWindowPixelX(static_cast<double>(v.x)),
+                    centeredToWindowPixelY(static_cast<double>(v.y))
+                });
+                continue;
+            }
+
+            double scalar = 0.0;
+            if (std::holds_alternative<GETypes::IntType>(p)) {
+                scalar = static_cast<double>(std::get<GETypes::IntType>(p).value);
+            } else if (std::holds_alternative<GETypes::FloatType>(p)) {
+                scalar = static_cast<double>(std::get<GETypes::FloatType>(p).value);
+            } else {
+                throw std::runtime_error("window.drawPoly points list must contain vec2/vec3/vec4 or numeric x,y pairs");
+            }
+
+            if (!hasPendingX) {
+                pendingX = scalar;
+                hasPendingX = true;
+            } else {
+                points.push_back({
+                    centeredToWindowPixelX(pendingX),
+                    centeredToWindowPixelY(scalar)
+                });
+                hasPendingX = false;
+            }
+        }
+
+        if (hasPendingX) {
+            throw std::runtime_error("window.drawPoly numeric point list requires an even number of values");
+        }
+
+        if (points.size() < 2) {
+            throw std::runtime_error("window.drawPoly requires at least two resolved points");
+        }
+
+        if (windowState.created) {
+            const int thickness = std::max(1, static_cast<int>(args[1].getNumberValue()));
+            windowState.backend.drawPolygon(
+                points,
+                thickness,
+                static_cast<float>(args[2].getNumberValue()),
+                static_cast<float>(args[3].getNumberValue()),
+                static_cast<float>(args[4].getNumberValue())
+            );
+        }
+
+        windowState.queuedDrawCommands++;
+        return;
+    }
     if (methodName == "drawText") {
         if (args.size() != 4 || args[0].typeName != "string") {
             throw std::runtime_error("window.drawText expects (string text, x, y, size)");
@@ -998,6 +1164,14 @@ inline void executeWindowMethodStatement(const std::string& methodName, const st
         }
         return;
     }
+    if (methodName == "setFPS" || methodName == "setFps") {
+        if (args.size() != 1) {
+            throw std::runtime_error("window.setFPS expects exactly 1 argument (fps)");
+        }
+        const int fps = static_cast<int>(args[0].getNumberValue());
+        windowState.targetFPS = std::max(0, fps);
+        return;
+    }
     if (methodName == "sleep") {
         if (args.size() != 1) {
             throw std::runtime_error("window.sleep expects exactly 1 argument (milliseconds)");
@@ -1017,6 +1191,7 @@ inline void executeWindowMethodStatement(const std::string& methodName, const st
         methodName == "mouseY" ||
         methodName == "keyCode" ||
         methodName == "drawCount" ||
+        methodName == "fps" ||
         methodName == "keyDown" ||
         methodName == "mouseDown"
     ) {
@@ -1123,6 +1298,36 @@ inline double evaluateExpression(
     size_t end,
     const std::unordered_map<std::string, RuntimeValue>& symbolTable
 ) {
+    if (start == end) {
+        const Token& token = tokens[start];
+        if (token.type == TokenType::NUMBER) {
+            return std::stod(token.value);
+        }
+        if (token.type == TokenType::IDENTIFIER) {
+            auto it = symbolTable.find(token.value);
+            if (it == symbolTable.end()) {
+                throw std::runtime_error("Unknown identifier: " + token.value);
+            }
+            return it->second.getNumberValue();
+        }
+    }
+
+    if (isMemberAccessStart(tokens, start) && start + 2 == end) {
+        return getMemberNumericValue(symbolTable, tokens[start].value, tokens[start + 2].value);
+    }
+
+    if (
+        (tokens[start].type == TokenType::IDENTIFIER || tokens[start].type == TokenType::TYPE) &&
+        start + 1 <= end &&
+        tokens[start + 1].type == TokenType::LPAREN
+    ) {
+        const size_t callEnd = findMatchingParen(tokens, start + 1);
+        if (callEnd == end) {
+            RuntimeValue callResult = callFunction(tokens, start, symbolTable);
+            return callResult.getNumberValue();
+        }
+    }
+
     if (
         start < end &&
         tokens[start].type == TokenType::OPERATOR &&
@@ -1238,6 +1443,146 @@ inline double evaluateExpression(
     }
 
     return values.back();
+}
+
+inline size_t findComparisonIndexAtDepthZero(
+    const std::vector<Token>& tokens,
+    size_t start,
+    size_t end
+) {
+    int depth = 0;
+    for (size_t i = start; i <= end && i < tokens.size(); i++) {
+        if (tokens[i].type == TokenType::LPAREN) {
+            depth++;
+            continue;
+        }
+        if (tokens[i].type == TokenType::RPAREN) {
+            depth--;
+            continue;
+        }
+        if (depth == 0 && tokens[i].type == TokenType::COMPARISON) {
+            return i;
+        }
+    }
+    return tokens.size();
+}
+
+inline bool evaluateConditionWithComparisonIndex(
+    const std::vector<Token>& tokens,
+    size_t start,
+    size_t end,
+    size_t comparisonIndex,
+    const std::unordered_map<std::string, RuntimeValue>& symbolTable
+) {
+    auto tryGetSimpleNumericValue = [&](size_t exprStart, size_t exprEnd, double& outValue) -> bool {
+        if (exprStart > exprEnd || exprEnd >= tokens.size()) {
+            return false;
+        }
+
+        if (exprStart == exprEnd) {
+            const Token& token = tokens[exprStart];
+            if (token.type == TokenType::NUMBER) {
+                outValue = std::stod(token.value);
+                return true;
+            }
+            if (token.type == TokenType::IDENTIFIER) {
+                auto it = symbolTable.find(token.value);
+                if (it != symbolTable.end()) {
+                    outValue = it->second.getNumberValue();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if (isMemberAccessStart(tokens, exprStart) && exprStart + 2 == exprEnd) {
+            outValue = getMemberNumericValue(symbolTable, tokens[exprStart].value, tokens[exprStart + 2].value);
+            return true;
+        }
+
+        return false;
+    };
+
+    if (comparisonIndex < tokens.size()) {
+        double lhs = 0.0;
+        if (!tryGetSimpleNumericValue(start, comparisonIndex - 1, lhs)) {
+            lhs = evaluateExpression(tokens, start, comparisonIndex - 1, symbolTable);
+        }
+
+        double rhs = 0.0;
+        if (!tryGetSimpleNumericValue(comparisonIndex + 1, end, rhs)) {
+            rhs = evaluateExpression(tokens, comparisonIndex + 1, end, symbolTable);
+        }
+
+        return compareValues(tokens[comparisonIndex].value, lhs, rhs);
+    }
+
+    double value = 0.0;
+    if (!tryGetSimpleNumericValue(start, end, value)) {
+        value = evaluateExpression(tokens, start, end, symbolTable);
+    }
+    return value != 0.0;
+}
+
+inline bool tryEvaluateSimpleLoopIncrementRhs(
+    const std::vector<Token>& tokens,
+    size_t start,
+    size_t end,
+    const std::unordered_map<std::string, RuntimeValue>& symbolTable,
+    const std::string& targetVar,
+    double& outValue
+) {
+    auto trySimpleValue = [&](size_t index, double& value) -> bool {
+        if (index >= tokens.size()) {
+            return false;
+        }
+
+        const Token& token = tokens[index];
+        if (token.type == TokenType::NUMBER) {
+            value = std::stod(token.value);
+            return true;
+        }
+
+        if (token.type == TokenType::IDENTIFIER) {
+            auto it = symbolTable.find(token.value);
+            if (it != symbolTable.end()) {
+                value = it->second.getNumberValue();
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    if (start > end || end >= tokens.size()) {
+        return false;
+    }
+
+    if (start == end) {
+        return trySimpleValue(start, outValue);
+    }
+
+    if (end == start + 2 &&
+        tokens[start].type == TokenType::IDENTIFIER &&
+        tokens[start].value == targetVar &&
+        tokens[start + 1].type == TokenType::OPERATOR &&
+        (tokens[start + 1].value == "+" || tokens[start + 1].value == "-" ||
+         tokens[start + 1].value == "*" || tokens[start + 1].value == "/")) {
+        auto lhsIt = symbolTable.find(targetVar);
+        if (lhsIt == symbolTable.end()) {
+            return false;
+        }
+
+        double rhs = 0.0;
+        if (!trySimpleValue(start + 2, rhs)) {
+            return false;
+        }
+
+        outValue = applyOperator(tokens[start + 1].value, lhsIt->second.getNumberValue(), rhs);
+        return true;
+    }
+
+    return false;
 }
 
 inline RuntimeValue evaluateBinaryVectorOperation(
@@ -2488,7 +2833,129 @@ inline size_t findMatchingBrace(const std::vector<Token>& tokens, size_t openBra
     throw std::runtime_error("Mismatched braces");
 }
 
+// Forward declarations for control flow executors used by executeFunction.
+size_t executeIf(const std::vector<Token>& tokens, size_t start, std::unordered_map<std::string, RuntimeValue>& symbolTable);
+size_t executeFor(const std::vector<Token>& tokens, size_t start, std::unordered_map<std::string, RuntimeValue>& symbolTable);
+size_t executeWhile(const std::vector<Token>& tokens, size_t start, std::unordered_map<std::string, RuntimeValue>& symbolTable);
+
+enum class FunctionPlannedStatementKind {
+    RETURN_STMT,
+    DECLARATION,
+    ASSIGNMENT,
+    MEMBER_ASSIGNMENT,
+    METHOD_CALL,
+    PRINT,
+    IF_STMT,
+    FOR_STMT,
+    WHILE_STMT,
+    FUNCTION_CALL,
+    UNKNOWN
+};
+
+struct FunctionPlannedStatement {
+    size_t start;
+    FunctionPlannedStatementKind kind;
+};
+
+inline FunctionPlannedStatementKind classifyFunctionBodyStatementAt(const std::vector<Token>& tokens, size_t i) {
+    if (i >= tokens.size()) return FunctionPlannedStatementKind::UNKNOWN;
+
+    if (tokens[i].type == TokenType::RETURN) return FunctionPlannedStatementKind::RETURN_STMT;
+    if (tokens[i].type == TokenType::TYPE) return FunctionPlannedStatementKind::DECLARATION;
+    if (tokens[i].type == TokenType::PRINT) return FunctionPlannedStatementKind::PRINT;
+    if (tokens[i].type == TokenType::IF) return FunctionPlannedStatementKind::IF_STMT;
+    if (tokens[i].type == TokenType::LOOP && tokens[i].value == "for") return FunctionPlannedStatementKind::FOR_STMT;
+    if (tokens[i].type == TokenType::LOOP && tokens[i].value == "while") return FunctionPlannedStatementKind::WHILE_STMT;
+
+    if (tokens[i].type == TokenType::IDENTIFIER) {
+        if (i + 3 < tokens.size() && tokens[i + 1].type == TokenType::DOT && tokens[i + 3].type == TokenType::EQUAL) {
+            return FunctionPlannedStatementKind::MEMBER_ASSIGNMENT;
+        }
+        if (i + 1 < tokens.size() && tokens[i + 1].type == TokenType::EQUAL) {
+            return FunctionPlannedStatementKind::ASSIGNMENT;
+        }
+        if (isMethodCallStart(tokens, i)) {
+            return FunctionPlannedStatementKind::METHOD_CALL;
+        }
+        if (i + 1 < tokens.size() && tokens[i + 1].type == TokenType::LPAREN) {
+            return FunctionPlannedStatementKind::FUNCTION_CALL;
+        }
+    }
+
+    return FunctionPlannedStatementKind::UNKNOWN;
+}
+
+inline size_t findNextFunctionBodyStatement(const std::vector<Token>& tokens, size_t start, FunctionPlannedStatementKind kind) {
+    if (start >= tokens.size()) {
+        return start;
+    }
+
+    if (kind == FunctionPlannedStatementKind::DECLARATION ||
+        kind == FunctionPlannedStatementKind::ASSIGNMENT ||
+        kind == FunctionPlannedStatementKind::MEMBER_ASSIGNMENT ||
+        kind == FunctionPlannedStatementKind::METHOD_CALL ||
+        kind == FunctionPlannedStatementKind::FUNCTION_CALL ||
+        kind == FunctionPlannedStatementKind::PRINT ||
+        kind == FunctionPlannedStatementKind::RETURN_STMT) {
+        size_t i = start;
+        while (i < tokens.size() && tokens[i].type != TokenType::SEMICOLON) {
+            i++;
+        }
+        return (i < tokens.size()) ? (i + 1) : tokens.size();
+    }
+
+    if (kind == FunctionPlannedStatementKind::IF_STMT ||
+        kind == FunctionPlannedStatementKind::FOR_STMT ||
+        kind == FunctionPlannedStatementKind::WHILE_STMT) {
+        if (start + 1 >= tokens.size() || tokens[start + 1].type != TokenType::LPAREN) {
+            return std::min(tokens.size(), start + 1);
+        }
+
+        size_t condEnd = start + 2;
+        int parenDepth = 1;
+        while (condEnd < tokens.size() && parenDepth > 0) {
+            if (tokens[condEnd].type == TokenType::LPAREN) parenDepth++;
+            if (tokens[condEnd].type == TokenType::RPAREN) parenDepth--;
+            if (parenDepth > 0) condEnd++;
+        }
+
+        if (parenDepth != 0 || condEnd + 1 >= tokens.size() || tokens[condEnd + 1].type != TokenType::LBRACE) {
+            return std::min(tokens.size(), start + 1);
+        }
+
+        size_t next = findMatchingBrace(tokens, condEnd + 1) + 1;
+        if (kind == FunctionPlannedStatementKind::IF_STMT &&
+            next < tokens.size() &&
+            tokens[next].type == TokenType::ELSE &&
+            next + 1 < tokens.size() &&
+            tokens[next + 1].type == TokenType::LBRACE) {
+            next = findMatchingBrace(tokens, next + 1) + 1;
+        }
+        return next;
+    }
+
+    return std::min(tokens.size(), start + 1);
+}
+
+inline std::vector<FunctionPlannedStatement> buildFunctionBodyPlan(const std::vector<Token>& tokens) {
+    std::vector<FunctionPlannedStatement> plan;
+    size_t i = 0;
+    while (i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE) {
+        FunctionPlannedStatementKind kind = classifyFunctionBodyStatementAt(tokens, i);
+        if (kind != FunctionPlannedStatementKind::UNKNOWN) {
+            plan.push_back({i, kind});
+        }
+
+        size_t next = findNextFunctionBodyStatement(tokens, i, kind);
+        i = (next > i) ? next : (i + 1);
+    }
+    return plan;
+}
+
 inline size_t parseFunctionDef(const std::vector<Token>& tokens, size_t start) {
+    if (start < tokens.size()) {
+        CurrentToken = tokens[start];
+    }
     // Format: returnType funcName ( param1, param2 ) { body }
     if (start + 2 >= tokens.size() || tokens[start].type != TokenType::TYPE) {
         throw std::runtime_error("Invalid function definition");
@@ -2561,125 +3028,152 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
         throw std::runtime_error("Function " + funcName + " expects " + std::to_string(func.parameters.size()) + " arguments");
     }
     
-    // Create local scope with parameters
-    std::unordered_map<std::string, RuntimeValue> localSymbolTable = globalSymbolTable;
+    // Execute against the parent symbol table and only shadow parameter/local names.
+    std::unordered_map<std::string, RuntimeValue>& localSymbolTable = globalSymbolTable;
+
+    struct ScopedBindings {
+        std::unordered_map<std::string, RuntimeValue>& symbols;
+        std::unordered_map<std::string, RuntimeValue> shadowedValues;
+        std::unordered_set<std::string> transientNames;
+
+        explicit ScopedBindings(std::unordered_map<std::string, RuntimeValue>& table)
+            : symbols(table) {}
+
+        void capture(const std::string& name) {
+            if (shadowedValues.find(name) != shadowedValues.end() || transientNames.count(name) != 0) {
+                return;
+            }
+
+            auto it = symbols.find(name);
+            if (it != symbols.end()) {
+                shadowedValues.emplace(name, it->second);
+            } else {
+                transientNames.insert(name);
+            }
+        }
+
+        ~ScopedBindings() {
+            for (const auto& name : transientNames) {
+                symbols.erase(name);
+            }
+            for (const auto& entry : shadowedValues) {
+                symbols[entry.first] = entry.second;
+            }
+        }
+    } scopedBindings(localSymbolTable);
+
     std::unordered_set<std::string> parameterNames;
     parameterNames.reserve(func.parameters.size());
     for (size_t i = 0; i < args.size(); i++) {
+        scopedBindings.capture(func.parameters[i].name);
         localSymbolTable[func.parameters[i].name] = args[i];
         parameterNames.insert(func.parameters[i].name);
     }
 
     std::unordered_set<std::string> locallyDeclared;
-
-    auto writeBackToParentScope = [&]() {
-        for (const auto& entry : localSymbolTable) {
-            const std::string& name = entry.first;
-            if (parameterNames.count(name) != 0 || locallyDeclared.count(name) != 0) {
-                continue;
-            }
-            auto parentIt = globalSymbolTable.find(name);
-            if (parentIt != globalSymbolTable.end()) {
-                parentIt->second = entry.second;
-            }
-        }
-    };
     
     // Use the function's stored body tokens instead of the global tokens
     const std::vector<Token>& bodyTokens = func.bodyTokens;
+    static std::unordered_map<std::string, std::vector<FunctionPlannedStatement>> functionBodyPlanCache;
+    auto planIt = functionBodyPlanCache.find(funcName);
+    if (planIt == functionBodyPlanCache.end()) {
+        planIt = functionBodyPlanCache.emplace(funcName, buildFunctionBodyPlan(bodyTokens)).first;
+    }
+    const std::vector<FunctionPlannedStatement>& bodyPlan = planIt->second;
     
-    // Execute function body
-    size_t i = 0;
-    while (i < bodyTokens.size() && bodyTokens[i].type != TokenType::END_OF_FILE) {
-        if (bodyTokens[i].type == TokenType::RETURN) {
-            i++;
+    for (const auto& stmt : bodyPlan) {
+        const size_t i = stmt.start;
+        if (i >= bodyTokens.size()) {
+            continue;
+        }
+
+        CurrentToken = bodyTokens[i];
+        if (stmt.kind == FunctionPlannedStatementKind::RETURN_STMT) {
+            size_t exprStart = i + 1;
             // Find the semicolon
-            size_t semi = i;
+            size_t semi = exprStart;
             while (semi < bodyTokens.size() && bodyTokens[semi].type != TokenType::SEMICOLON) {
                 semi++;
             }
             
             // Evaluate return value
-            if (semi == i) {
-                writeBackToParentScope();
+            if (semi == exprStart) {
                 return ReturnValue();
             }
             
             // Check if it's a simple number
-            if (bodyTokens[i].type == TokenType::NUMBER && semi == i + 1) {
-                return ReturnValue(RuntimeValue(func.returnType, std::stod(bodyTokens[i].value)));
+            if (bodyTokens[exprStart].type == TokenType::NUMBER && semi == exprStart + 1) {
+                return ReturnValue(RuntimeValue(func.returnType, std::stod(bodyTokens[exprStart].value)));
             } 
             // Check if it's a simple identifier (not followed by operators)
-            else if (bodyTokens[i].type == TokenType::IDENTIFIER && semi == i + 1) {
-                auto it = localSymbolTable.find(bodyTokens[i].value);
+            else if (bodyTokens[exprStart].type == TokenType::IDENTIFIER && semi == exprStart + 1) {
+                auto it = localSymbolTable.find(bodyTokens[exprStart].value);
                 if (it != localSymbolTable.end()) {
-                    writeBackToParentScope();
                     return ReturnValue(it->second);
                 }
             }
             
             // Try to evaluate as expression
-            if (semi > i) {
-                double result = evaluateExpression(bodyTokens, i, semi - 1, localSymbolTable);
-                writeBackToParentScope();
+            if (semi > exprStart) {
+                double result = evaluateExpression(bodyTokens, exprStart, semi - 1, localSymbolTable);
                 return ReturnValue(RuntimeValue(func.returnType, result));
             }
             
-            writeBackToParentScope();
             return ReturnValue();
         }
         
-        if (bodyTokens[i].type == TokenType::TYPE) {
+        if (stmt.kind == FunctionPlannedStatementKind::DECLARATION) {
             if (i + 1 < bodyTokens.size() && bodyTokens[i + 1].type == TokenType::IDENTIFIER) {
-                locallyDeclared.insert(bodyTokens[i + 1].value);
+                const std::string& declaredName = bodyTokens[i + 1].value;
+                if (locallyDeclared.insert(declaredName).second) {
+                    scopedBindings.capture(declaredName);
+                }
             }
-            i = executeDeclaration(bodyTokens, i, localSymbolTable);
+            executeDeclaration(bodyTokens, i, localSymbolTable);
             continue;
         }
 
-        if (
-            bodyTokens[i].type == TokenType::IDENTIFIER &&
-            i + 1 < bodyTokens.size() &&
-            bodyTokens[i + 1].type == TokenType::EQUAL
-        ) {
-            i = executeAssignment(bodyTokens, i, localSymbolTable);
+        if (stmt.kind == FunctionPlannedStatementKind::ASSIGNMENT) {
+            executeAssignment(bodyTokens, i, localSymbolTable);
             continue;
         }
 
-        if (
-            bodyTokens[i].type == TokenType::IDENTIFIER &&
-            i + 3 < bodyTokens.size() &&
-            bodyTokens[i + 1].type == TokenType::DOT &&
-            bodyTokens[i + 3].type == TokenType::EQUAL
-        ) {
-            i = executeMemberAssignment(bodyTokens, i, localSymbolTable);
+        if (stmt.kind == FunctionPlannedStatementKind::MEMBER_ASSIGNMENT) {
+            executeMemberAssignment(bodyTokens, i, localSymbolTable);
             continue;
         }
 
-        if (isMethodCallStart(bodyTokens, i)) {
-            i = executeMethodCallStatement(bodyTokens, i, localSymbolTable);
+        if (stmt.kind == FunctionPlannedStatementKind::METHOD_CALL) {
+            executeMethodCallStatement(bodyTokens, i, localSymbolTable);
             continue;
         }
 
-        if (bodyTokens[i].type == TokenType::PRINT) {
-            i = executePrint(bodyTokens, i, localSymbolTable);
+        if (stmt.kind == FunctionPlannedStatementKind::PRINT) {
+            executePrint(bodyTokens, i, localSymbolTable);
             continue;
         }
 
-        if (
-            bodyTokens[i].type == TokenType::IDENTIFIER &&
-            i + 1 < bodyTokens.size() &&
-            bodyTokens[i + 1].type == TokenType::LPAREN
-        ) {
-            i = executeFunctionCallStatement(bodyTokens, i, localSymbolTable);
+        if (stmt.kind == FunctionPlannedStatementKind::IF_STMT) {
+            executeIf(bodyTokens, i, localSymbolTable);
             continue;
         }
-        
-        i++;
+
+        if (stmt.kind == FunctionPlannedStatementKind::FOR_STMT) {
+            executeFor(bodyTokens, i, localSymbolTable);
+            continue;
+        }
+
+        if (stmt.kind == FunctionPlannedStatementKind::WHILE_STMT) {
+            executeWhile(bodyTokens, i, localSymbolTable);
+            continue;
+        }
+
+        if (stmt.kind == FunctionPlannedStatementKind::FUNCTION_CALL) {
+            executeFunctionCallStatement(bodyTokens, i, localSymbolTable);
+            continue;
+        }
     }
 
-    writeBackToParentScope();
-    
     // If no explicit return, return default value
     if (func.returnType == "int" || func.returnType == "float") {
         return ReturnValue(RuntimeValue(func.returnType, 0.0));
@@ -2692,6 +3186,9 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
 
 inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start, std::unordered_map<std::string, RuntimeValue>& symbolTable) {
     // Format: funcName(arg1, arg2, ...)
+    if (start < tokens.size()) {
+        CurrentToken = tokens[start];
+    }
     std::string funcName = tokens[start].value;
     
     std::vector<RuntimeValue> args;
@@ -2755,8 +3252,10 @@ inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start,
 }
 
 inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start, const std::unordered_map<std::string, RuntimeValue>& symbolTable) {
-    std::unordered_map<std::string, RuntimeValue> tempSymbolTable = symbolTable;
-    return callFunction(tokens, start, tempSymbolTable);
+    // Most expression evaluators pass a const reference for convenience, but function
+    // calls may need to mutate the active runtime scope. Forward to the mutable
+    // overload to avoid copying the entire symbol table on every call.
+    return callFunction(tokens, start, const_cast<std::unordered_map<std::string, RuntimeValue>&>(symbolTable));
 }
 
 // Forward declarations
@@ -2770,18 +3269,182 @@ inline bool evaluateCondition(
     size_t end,
     const std::unordered_map<std::string, RuntimeValue>& symbolTable
 ) {
-    // Look for comparison operators
-    for (size_t i = start; i <= end && i < tokens.size(); i++) {
-        if (tokens[i].type == TokenType::COMPARISON) {
-            double lhs = evaluateExpression(tokens, start, i - 1, symbolTable);
-            double rhs = evaluateExpression(tokens, i + 1, end, symbolTable);
-            return compareValues(tokens[i].value, lhs, rhs);
+    const size_t comparisonIndex = findComparisonIndexAtDepthZero(tokens, start, end);
+    return evaluateConditionWithComparisonIndex(tokens, start, end, comparisonIndex, symbolTable);
+}
+
+enum class PlannedStatementKind {
+    DECLARATION,
+    ASSIGNMENT,
+    MEMBER_ASSIGNMENT,
+    METHOD_CALL,
+    FUNCTION_CALL,
+    PRINT,
+    IF_STMT,
+    FOR_STMT,
+    WHILE_STMT,
+    UNKNOWN
+};
+
+struct PlannedStatement {
+    size_t start;
+    PlannedStatementKind kind;
+};
+
+inline PlannedStatementKind classifyStatementAt(const std::vector<Token>& tokens, size_t i) {
+    if (i >= tokens.size()) return PlannedStatementKind::UNKNOWN;
+
+    if (tokens[i].type == TokenType::TYPE) return PlannedStatementKind::DECLARATION;
+    if (tokens[i].type == TokenType::PRINT) return PlannedStatementKind::PRINT;
+    if (tokens[i].type == TokenType::IF) return PlannedStatementKind::IF_STMT;
+    if (tokens[i].type == TokenType::LOOP && tokens[i].value == "for") return PlannedStatementKind::FOR_STMT;
+    if (tokens[i].type == TokenType::LOOP && tokens[i].value == "while") return PlannedStatementKind::WHILE_STMT;
+
+    if (tokens[i].type == TokenType::IDENTIFIER) {
+        if (i + 3 < tokens.size() && tokens[i + 1].type == TokenType::DOT && isAssignmentOperatorToken(tokens[i + 3])) {
+            return PlannedStatementKind::MEMBER_ASSIGNMENT;
+        }
+        if (i + 1 < tokens.size() && isAssignmentOperatorToken(tokens[i + 1])) {
+            return PlannedStatementKind::ASSIGNMENT;
+        }
+        if (isMethodCallStart(tokens, i)) {
+            return PlannedStatementKind::METHOD_CALL;
+        }
+        if (i + 1 < tokens.size() && tokens[i + 1].type == TokenType::LPAREN) {
+            return PlannedStatementKind::FUNCTION_CALL;
         }
     }
-    
-    // If no comparison, try to evaluate as a number (non-zero is true)
-    double value = evaluateExpression(tokens, start, end, symbolTable);
-    return value != 0.0;
+
+    return PlannedStatementKind::UNKNOWN;
+}
+
+inline size_t findNextSemicolon(const std::vector<Token>& tokens, size_t start, size_t endExclusive) {
+    size_t i = start;
+    while (i < endExclusive && i < tokens.size() && tokens[i].type != TokenType::SEMICOLON) {
+        i++;
+    }
+    if (i < tokens.size() && tokens[i].type == TokenType::SEMICOLON) {
+        return i + 1;
+    }
+    return std::min(endExclusive, start + 1);
+}
+
+inline size_t nextStatementStart(
+    const std::vector<Token>& tokens,
+    size_t start,
+    size_t endExclusive,
+    PlannedStatementKind kind
+) {
+    if (kind == PlannedStatementKind::DECLARATION ||
+        kind == PlannedStatementKind::ASSIGNMENT ||
+        kind == PlannedStatementKind::MEMBER_ASSIGNMENT ||
+        kind == PlannedStatementKind::METHOD_CALL ||
+        kind == PlannedStatementKind::FUNCTION_CALL ||
+        kind == PlannedStatementKind::PRINT) {
+        return findNextSemicolon(tokens, start, endExclusive);
+    }
+
+    if (kind == PlannedStatementKind::IF_STMT || kind == PlannedStatementKind::FOR_STMT || kind == PlannedStatementKind::WHILE_STMT) {
+        if (start + 1 >= tokens.size() || tokens[start + 1].type != TokenType::LPAREN) {
+            return std::min(endExclusive, start + 1);
+        }
+
+        size_t condEnd = start + 2;
+        int parenDepth = 1;
+        while (condEnd < tokens.size() && parenDepth > 0) {
+            if (tokens[condEnd].type == TokenType::LPAREN) parenDepth++;
+            if (tokens[condEnd].type == TokenType::RPAREN) parenDepth--;
+            if (parenDepth > 0) condEnd++;
+        }
+
+        if (parenDepth != 0 || condEnd + 1 >= tokens.size() || tokens[condEnd + 1].type != TokenType::LBRACE) {
+            return std::min(endExclusive, start + 1);
+        }
+
+        size_t next = findMatchingBrace(tokens, condEnd + 1) + 1;
+
+        if (kind == PlannedStatementKind::IF_STMT &&
+            next < endExclusive &&
+            next < tokens.size() &&
+            tokens[next].type == TokenType::ELSE &&
+            next + 1 < tokens.size() &&
+            tokens[next + 1].type == TokenType::LBRACE) {
+            next = findMatchingBrace(tokens, next + 1) + 1;
+        }
+
+        return std::min(next, endExclusive);
+    }
+
+    return std::min(endExclusive, start + 1);
+}
+
+inline std::vector<PlannedStatement> buildPlannedStatements(
+    const std::vector<Token>& tokens,
+    size_t start,
+    size_t endExclusive
+) {
+    std::vector<PlannedStatement> plan;
+    size_t i = start;
+    while (i < endExclusive && i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE) {
+        PlannedStatementKind kind = classifyStatementAt(tokens, i);
+        if (kind != PlannedStatementKind::UNKNOWN) {
+            plan.push_back({i, kind});
+        }
+        size_t next = nextStatementStart(tokens, i, endExclusive, kind);
+        i = (next > i) ? next : (i + 1);
+    }
+    return plan;
+}
+
+inline void executePlannedStatements(
+    const std::vector<Token>& tokens,
+    const std::vector<PlannedStatement>& plan,
+    std::unordered_map<std::string, RuntimeValue>& symbolTable
+) {
+    for (const auto& stmt : plan) {
+        const size_t i = stmt.start;
+        if (i >= tokens.size()) {
+            continue;
+        }
+        CurrentToken = tokens[i];
+
+        if (stmt.kind == PlannedStatementKind::DECLARATION) {
+            executeDeclaration(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::ASSIGNMENT) {
+            executeAssignment(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::MEMBER_ASSIGNMENT) {
+            executeMemberAssignment(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::METHOD_CALL) {
+            executeMethodCallStatement(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::FUNCTION_CALL) {
+            executeFunctionCallStatement(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::PRINT) {
+            executePrint(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::IF_STMT) {
+            executeIf(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::FOR_STMT) {
+            executeFor(tokens, i, symbolTable);
+            continue;
+        }
+        if (stmt.kind == PlannedStatementKind::WHILE_STMT) {
+            executeWhile(tokens, i, symbolTable);
+            continue;
+        }
+    }
 }
 
 inline size_t executeIf(
@@ -2789,6 +3452,9 @@ inline size_t executeIf(
     size_t start,
     std::unordered_map<std::string, RuntimeValue>& symbolTable
 ) {
+    if (start < tokens.size()) {
+        CurrentToken = tokens[start];
+    }
     if (start >= tokens.size() || tokens[start].type != TokenType::IF) {
         throw std::runtime_error("Expected 'if'");
     }
@@ -2823,6 +3489,7 @@ inline size_t executeIf(
         // Execute the if block
         size_t i = bodyStart;
         while (i < bodyEnd && tokens[i].type != TokenType::END_OF_FILE) {
+            CurrentToken = tokens[i];
             if (tokens[i].type == TokenType::TYPE) {
                 i = executeDeclaration(tokens, i, symbolTable);
             } else if (
@@ -2872,6 +3539,7 @@ inline size_t executeIf(
             // Execute the else block
             size_t i = elseStart;
             while (i < elseEnd && tokens[i].type != TokenType::END_OF_FILE) {
+                CurrentToken = tokens[i];
                 if (tokens[i].type == TokenType::TYPE) {
                     i = executeDeclaration(tokens, i, symbolTable);
                 } else if (
@@ -2920,6 +3588,9 @@ inline size_t executeWhile(
     size_t start,
     std::unordered_map<std::string, RuntimeValue>& symbolTable
 ) {
+    if (start < tokens.size()) {
+        CurrentToken = tokens[start];
+    }
     if (start >= tokens.size() || tokens[start].type != TokenType::LOOP || tokens[start].value != "while") {
         throw std::runtime_error("Expected 'while'");
     }
@@ -2947,46 +3618,12 @@ inline size_t executeWhile(
     
     size_t bodyStart = condEnd + 2;
     size_t bodyEnd = findMatchingBrace(tokens, condEnd + 1);
+    const size_t condComparisonIndex = findComparisonIndexAtDepthZero(tokens, start + 2, condEnd - 1);
+    const std::vector<PlannedStatement> bodyPlan = buildPlannedStatements(tokens, bodyStart, bodyEnd);
     
     // Execute while loop
-    while (evaluateCondition(tokens, start + 2, condEnd - 1, symbolTable)) {
-        size_t i = bodyStart;
-        while (i < bodyEnd && tokens[i].type != TokenType::END_OF_FILE) {
-            if (tokens[i].type == TokenType::TYPE) {
-                i = executeDeclaration(tokens, i, symbolTable);
-            } else if (
-                tokens[i].type == TokenType::IDENTIFIER &&
-                i + 1 < tokens.size() &&
-                isAssignmentOperatorToken(tokens[i + 1])
-            ) {
-                i = executeAssignment(tokens, i, symbolTable);
-            } else if (
-                tokens[i].type == TokenType::IDENTIFIER &&
-                i + 3 < tokens.size() &&
-                tokens[i + 1].type == TokenType::DOT &&
-                isAssignmentOperatorToken(tokens[i + 3])
-            ) {
-                i = executeMemberAssignment(tokens, i, symbolTable);
-            } else if (isMethodCallStart(tokens, i)) {
-                i = executeMethodCallStatement(tokens, i, symbolTable);
-            } else if (
-                tokens[i].type == TokenType::IDENTIFIER &&
-                i + 1 < tokens.size() &&
-                tokens[i + 1].type == TokenType::LPAREN
-            ) {
-                i = executeFunctionCallStatement(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::PRINT) {
-                i = executePrint(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::IF) {
-                i = executeIf(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::LOOP && tokens[i].value == "for") {
-                i = executeFor(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::LOOP && tokens[i].value == "while") {
-                i = executeWhile(tokens, i, symbolTable);
-            } else {
-                i++;
-            }
-        }
+    while (evaluateConditionWithComparisonIndex(tokens, start + 2, condEnd - 1, condComparisonIndex, symbolTable)) {
+        executePlannedStatements(tokens, bodyPlan, symbolTable);
     }
     
     return bodyEnd + 1;
@@ -2997,6 +3634,9 @@ inline size_t executeFor(
     size_t start,
     std::unordered_map<std::string, RuntimeValue>& symbolTable
 ) {
+    if (start < tokens.size()) {
+        CurrentToken = tokens[start];
+    }
     if (start >= tokens.size() || tokens[start].type != TokenType::LOOP || tokens[start].value != "for") {
         throw std::runtime_error("Expected 'for'");
     }
@@ -3035,46 +3675,12 @@ inline size_t executeFor(
     
     size_t bodyStart = closeParen + 2;
     size_t bodyEnd = findMatchingBrace(tokens, closeParen + 1);
+    const size_t condComparisonIndex = findComparisonIndexAtDepthZero(tokens, firstSemi + 1, secondSemi - 1);
+    const std::vector<PlannedStatement> bodyPlan = buildPlannedStatements(tokens, bodyStart, bodyEnd);
     
     // Execute for loop
-    while (evaluateCondition(tokens, firstSemi + 1, secondSemi - 1, symbolTable)) {
-        size_t i = bodyStart;
-        while (i < bodyEnd && tokens[i].type != TokenType::END_OF_FILE) {
-            if (tokens[i].type == TokenType::TYPE) {
-                i = executeDeclaration(tokens, i, symbolTable);
-            } else if (
-                tokens[i].type == TokenType::IDENTIFIER &&
-                i + 1 < tokens.size() &&
-                isAssignmentOperatorToken(tokens[i + 1])
-            ) {
-                i = executeAssignment(tokens, i, symbolTable);
-            } else if (
-                tokens[i].type == TokenType::IDENTIFIER &&
-                i + 3 < tokens.size() &&
-                tokens[i + 1].type == TokenType::DOT &&
-                isAssignmentOperatorToken(tokens[i + 3])
-            ) {
-                i = executeMemberAssignment(tokens, i, symbolTable);
-            } else if (isMethodCallStart(tokens, i)) {
-                i = executeMethodCallStatement(tokens, i, symbolTable);
-            } else if (
-                tokens[i].type == TokenType::IDENTIFIER &&
-                i + 1 < tokens.size() &&
-                tokens[i + 1].type == TokenType::LPAREN
-            ) {
-                i = executeFunctionCallStatement(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::PRINT) {
-                i = executePrint(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::IF) {
-                i = executeIf(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::LOOP && tokens[i].value == "for") {
-                i = executeFor(tokens, i, symbolTable);
-            } else if (tokens[i].type == TokenType::LOOP && tokens[i].value == "while") {
-                i = executeWhile(tokens, i, symbolTable);
-            } else {
-                i++;
-            }
-        }
+    while (evaluateConditionWithComparisonIndex(tokens, firstSemi + 1, secondSemi - 1, condComparisonIndex, symbolTable)) {
+        executePlannedStatements(tokens, bodyPlan, symbolTable);
         
         // Execute increment - handle assignment and ++/-- forms
         if (secondSemi + 1 < closeParen) {
@@ -3147,7 +3753,10 @@ inline size_t executeFor(
                 isAssignmentOperatorToken(tokens[secondSemi + 2])) {
                 // This is an assignment: var = expr
                 std::string varName = tokens[secondSemi + 1].value;
-                double rhsValue = evaluateExpression(tokens, secondSemi + 3, closeParen - 1, symbolTable);
+                double rhsValue = 0.0;
+                if (!tryEvaluateSimpleLoopIncrementRhs(tokens, secondSemi + 3, closeParen - 1, symbolTable, varName, rhsValue)) {
+                    rhsValue = evaluateExpression(tokens, secondSemi + 3, closeParen - 1, symbolTable);
+                }
                 const std::string op = tokens[secondSemi + 2].value;
                 
                 // Get the variable type
@@ -3199,6 +3808,9 @@ inline size_t executeImport(
     std::unordered_map<std::string, RuntimeValue>& symbolTable,
     std::vector<Token>& allTokens
 ) {
+    if (start < tokens.size()) {
+        CurrentToken = tokens[start];
+    }
     if (start >= tokens.size() || tokens[start].type != TokenType::IMPORT) {
         throw std::runtime_error("Expected 'import'");
     }
@@ -3271,6 +3883,7 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
     // First pass: collect function definitions
     size_t i = 0;
     while (i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE) {
+        CurrentToken = tokens[i];
         // Look for TYPE followed by IDENTIFIER followed by LPAREN (function definition)
         if (tokens[i].type == TokenType::TYPE && 
             i + 2 < tokens.size() && 
@@ -3285,6 +3898,7 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
     // Second pass: execute statements
     i = 0;
     while (i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE) {
+        CurrentToken = tokens[i];
         // Skip function definitions
         if (tokens[i].type == TokenType::TYPE && 
             i + 2 < tokens.size() && 

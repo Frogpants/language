@@ -8,6 +8,22 @@
 
 inline std::vector<Token> tokenize(const std::string& source) {
     std::vector<Token> tokens;
+    size_t line = 1;
+    size_t column = 1;
+
+    auto pushToken = [&](TokenType type, const std::string& value, size_t tokenLine, size_t tokenColumn) {
+        tokens.push_back({type, value, tokenLine, tokenColumn});
+    };
+
+    auto advance = [&](char c) {
+        if (c == '\n') {
+            line++;
+            column = 1;
+        } else {
+            column++;
+        }
+    };
+
     auto isUnaryMinusContext = [&tokens]() {
         if (tokens.empty()) {
             return true;
@@ -26,16 +42,26 @@ inline std::vector<Token> tokenize(const std::string& source) {
                previous == TokenType::IMPORT;
     };
     
-    for(size_t i = 0; i < source.length(); i++) {
+    size_t i = 0;
+    while (i < source.length()) {
         char c = source[i];
         unsigned char uc = static_cast<unsigned char>(c);
+        const size_t tokenLine = line;
+        const size_t tokenColumn = column;
         
         // Skip whitespace
-        if(std::isspace(uc)) continue;
+        if(std::isspace(uc)) {
+            advance(c);
+            i++;
+            continue;
+        }
         
         // Skip comments
         if(c == '/' && i + 1 < source.length() && source[i + 1] == '/') {
-            while(i < source.length() && source[i] != '\n') i++;
+            while(i < source.length() && source[i] != '\n') {
+                advance(source[i]);
+                i++;
+            }
             continue;
         }
         
@@ -43,21 +69,29 @@ inline std::vector<Token> tokenize(const std::string& source) {
         if(c == '"') {
             std::string str;
             i++;
+            advance(c);
             while(i < source.length() && source[i] != '"') {
                 if(source[i] == '\\' && i + 1 < source.length()) {
+                    char escape = source[i + 1];
+                    if(escape == 'n') str += '\n';
+                    else if(escape == 't') str += '\t';
+                    else if(escape == '"') str += '"';
+                    else str += escape;
+                    advance(source[i]);
                     i++;
-                    if(source[i] == 'n') str += '\n';
-                    else if(source[i] == 't') str += '\t';
-                    else if(source[i] == '"') str += '"';
-                    else str += source[i];
+                    advance(source[i]);
+                    i++;
                 } else {
                     str += source[i];
+                    advance(source[i]);
+                    i++;
                 }
+            }
+            if(i < source.length()) {
+                advance(source[i]);
                 i++;
             }
-            if(i < source.length()) i++; // skip closing quote
-            tokens.push_back({TokenType::STRING, str});
-            i--;
+            pushToken(TokenType::STRING, str, tokenLine, tokenColumn);
             continue;
         }
         
@@ -66,81 +100,119 @@ inline std::vector<Token> tokenize(const std::string& source) {
             std::string word;
             while(i < source.length() && (std::isalnum(static_cast<unsigned char>(source[i])) || source[i] == '_')) {
                 word += source[i];
+                advance(source[i]);
                 i++;
             }
-            i--; // back up one since the loop will increment
             
             if(keywords.find(word) != keywords.end()) {
-                tokens.push_back({keywords[word], word});
+                pushToken(keywords[word], word, tokenLine, tokenColumn);
             } else {
-                tokens.push_back({TokenType::IDENTIFIER, word});
+                pushToken(TokenType::IDENTIFIER, word, tokenLine, tokenColumn);
             }
+            continue;
         }
         // Numbers
         else if(std::isdigit(uc) || (c == '-' && i + 1 < source.length() && std::isdigit(static_cast<unsigned char>(source[i + 1])) && isUnaryMinusContext())) {
             std::string num;
             if (c == '-') {
                 num += c;
+                advance(c);
                 i++;
             }
             while(i < source.length() && (std::isdigit(static_cast<unsigned char>(source[i])) || source[i] == '.')) {
                 num += source[i];
+                advance(source[i]);
                 i++;
             }
-            i--;
-            tokens.push_back({TokenType::NUMBER, num});
+            pushToken(TokenType::NUMBER, num, tokenLine, tokenColumn);
+            continue;
         }
         // Operators and punctuation
         else if(c == '=') {
             if(i + 1 < source.length() && source[i + 1] == '=') {
-                tokens.push_back({TokenType::COMPARISON, "=="});
+                pushToken(TokenType::COMPARISON, "==", tokenLine, tokenColumn);
+                advance(c);
+                i++;
+                advance(source[i]);
                 i++;
             } else {
-                tokens.push_back({TokenType::EQUAL, "="});
+                pushToken(TokenType::EQUAL, "=", tokenLine, tokenColumn);
+                advance(c);
+                i++;
             }
+            continue;
         }
         else if(c == '!' && i + 1 < source.length() && source[i + 1] == '=') {
-            tokens.push_back({TokenType::COMPARISON, "!="});
+            pushToken(TokenType::COMPARISON, "!=", tokenLine, tokenColumn);
+            advance(c);
             i++;
+            advance(source[i]);
+            i++;
+            continue;
         }
         else if(c == '<') {
             if(i + 1 < source.length() && source[i + 1] == '=') {
-                tokens.push_back({TokenType::COMPARISON, "<="});
+                pushToken(TokenType::COMPARISON, "<=", tokenLine, tokenColumn);
+                advance(c);
+                i++;
+                advance(source[i]);
                 i++;
             } else {
-                tokens.push_back({TokenType::COMPARISON, "<"});
+                pushToken(TokenType::COMPARISON, "<", tokenLine, tokenColumn);
+                advance(c);
+                i++;
             }
+            continue;
         }
         else if(c == '>') {
             if(i + 1 < source.length() && source[i + 1] == '=') {
-                tokens.push_back({TokenType::COMPARISON, ">="});
+                pushToken(TokenType::COMPARISON, ">=", tokenLine, tokenColumn);
+                advance(c);
+                i++;
+                advance(source[i]);
                 i++;
             } else {
-                tokens.push_back({TokenType::COMPARISON, ">"});
+                pushToken(TokenType::COMPARISON, ">", tokenLine, tokenColumn);
+                advance(c);
+                i++;
             }
+            continue;
         }
-        else if(c == ';') tokens.push_back({TokenType::SEMICOLON, ";"});
-        else if(c == '(') tokens.push_back({TokenType::LPAREN, "("});
-        else if(c == ')') tokens.push_back({TokenType::RPAREN, ")"});
-        else if(c == '{') tokens.push_back({TokenType::LBRACE, "{"});
-        else if(c == '}') tokens.push_back({TokenType::RBRACE, "}"});
-        else if(c == '[') tokens.push_back({TokenType::LBRACKET, "["});
-        else if(c == ']') tokens.push_back({TokenType::RBRACKET, "]"});
-        else if(c == ',') tokens.push_back({TokenType::COMMA, ","});
-        else if(c == '.') tokens.push_back({TokenType::DOT, "."});
+        else if(c == ';') { pushToken(TokenType::SEMICOLON, ";", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == '(') { pushToken(TokenType::LPAREN, "(", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == ')') { pushToken(TokenType::RPAREN, ")", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == '{') { pushToken(TokenType::LBRACE, "{", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == '}') { pushToken(TokenType::RBRACE, "}", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == '[') { pushToken(TokenType::LBRACKET, "[", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == ']') { pushToken(TokenType::RBRACKET, "]", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == ',') { pushToken(TokenType::COMMA, ",", tokenLine, tokenColumn); advance(c); i++; continue; }
+        else if(c == '.') { pushToken(TokenType::DOT, ".", tokenLine, tokenColumn); advance(c); i++; continue; }
         else if((c == '+' || c == '-' || c == '*' || c == '/') && i + 1 < source.length() && source[i + 1] == '=') {
-            tokens.push_back({TokenType::EQUAL, std::string(1, c) + "="});
+            pushToken(TokenType::EQUAL, std::string(1, c) + "=", tokenLine, tokenColumn);
+            advance(c);
             i++;
+            advance(source[i]);
+            i++;
+            continue;
         }
         else if(c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^') {
-            tokens.push_back({TokenType::OPERATOR, std::string(1, c)});
+            pushToken(TokenType::OPERATOR, std::string(1, c), tokenLine, tokenColumn);
+            advance(c);
+            i++;
+            continue;
         }
         else {
-            tokens.push_back({TokenType::UNKNOWN, std::string(1, c)});
+            pushToken(TokenType::UNKNOWN, std::string(1, c), tokenLine, tokenColumn);
+            advance(c);
+            i++;
+            continue;
         }
+
+        advance(c);
+        i++;
     }
     
-    tokens.push_back({TokenType::END_OF_FILE, ""});
+    tokens.push_back({TokenType::END_OF_FILE, "", line, column});
     return tokens;
 }
 

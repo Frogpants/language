@@ -5,6 +5,8 @@
 #include <cctype>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #if defined(__linux__)
 #include <X11/Xlib.h>
@@ -417,6 +419,64 @@ struct NativeWindowBackend {
         (void)y1;
         (void)x2;
         (void)y2;
+        (void)thickness;
+        (void)r;
+        (void)g;
+        (void)b;
+#endif
+    }
+
+    void drawTriangle(int x1, int y1, int x2, int y2, int x3, int y3, int thickness, float r, float g, float b) {
+#if defined(__linux__)
+        if (!created || !display || !backBuffer || !gc) {
+            return;
+        }
+        XSetForeground(display, gc, colorToPixel(r, g, b));
+        XSetLineAttributes(display, gc, std::max(1, thickness), LineSolid, CapRound, JoinRound);
+        XPoint pts[4];
+        pts[0] = {static_cast<short>(x1), static_cast<short>(y1)};
+        pts[1] = {static_cast<short>(x2), static_cast<short>(y2)};
+        pts[2] = {static_cast<short>(x3), static_cast<short>(y3)};
+        pts[3] = {static_cast<short>(x1), static_cast<short>(y1)};
+        XDrawLines(display, backBuffer, gc, pts, 4, CoordModeOrigin);
+        XSetLineAttributes(display, gc, 1, LineSolid, CapButt, JoinMiter);
+#else
+        (void)x1;
+        (void)y1;
+        (void)x2;
+        (void)y2;
+        (void)x3;
+        (void)y3;
+        (void)thickness;
+        (void)r;
+        (void)g;
+        (void)b;
+#endif
+    }
+
+    void drawPolygon(const std::vector<std::pair<int, int>>& points, int thickness, float r, float g, float b) {
+#if defined(__linux__)
+        if (!created || !display || !backBuffer || !gc) {
+            return;
+        }
+        if (points.size() < 2) {
+            return;
+        }
+
+        XSetForeground(display, gc, colorToPixel(r, g, b));
+        XSetLineAttributes(display, gc, std::max(1, thickness), LineSolid, CapRound, JoinRound);
+
+        std::vector<XPoint> xpts;
+        xpts.reserve(points.size() + 1);
+        for (const auto& p : points) {
+            xpts.push_back({static_cast<short>(p.first), static_cast<short>(p.second)});
+        }
+        xpts.push_back({static_cast<short>(points.front().first), static_cast<short>(points.front().second)});
+
+        XDrawLines(display, backBuffer, gc, xpts.data(), static_cast<int>(xpts.size()), CoordModeOrigin);
+        XSetLineAttributes(display, gc, 1, LineSolid, CapButt, JoinMiter);
+#else
+        (void)points;
         (void)thickness;
         (void)r;
         (void)g;

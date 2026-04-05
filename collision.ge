@@ -18,3 +18,26 @@ bool circle2D(vec2 a, vec2 b, float r1, float r2) {
     }
     return false;
 }
+
+
+bool box3D(vec3 a, vec3 b, vec3 d1, vec3 d2) {
+    vec2 diff = b - a;
+    vec2 size = d1 + d2;
+    if (diff.x <= size.x) {
+        if (diff.y <= size.y) {
+            if (diff.z <= size.z) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool sphere3D(vec3 a, vec3 b, float r1, float r2) {
+    float diff = length(b - a);
+    float size = r1 + r2;
+    if (dif <= size) {
+        return true;
+    }
+    return false;
+}

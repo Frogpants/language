@@ -20,8 +20,9 @@ inline void SetKeywords() {
     keywords["while"] = TokenType::LOOP;
     keywords["return"] = TokenType::RETURN;
     keywords["import"] = TokenType::IMPORT;
-    keywords["true"] = TokenType::IDENTIFIER;
-    keywords["false"] = TokenType::IDENTIFIER;
+    // Bool literals are intentionally tokenized as TYPE so they share type-keyword coloring.
+    keywords["true"] = TokenType::TYPE;
+    keywords["false"] = TokenType::TYPE;
 }
 
 inline void SetOperators() {

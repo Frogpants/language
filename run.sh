@@ -10,10 +10,10 @@ if [ ! -f "$SCRIPT_PATH" ]; then
     exit 1
 fi
 
-echo "[build] compiling interpreter..."
+echo "[build] compiling ge interpreter..."
 EXTRA_LIBS=""
 if [ "$(uname -s)" = "Linux" ]; then
-    EXTRA_LIBS="-lX11"
+    EXTRA_LIBS="-lX11 -lGL"
 fi
 
 if ! g++ -std=c++17 interpreter/run.cpp -o /tmp/interp $EXTRA_LIBS; then

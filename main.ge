@@ -1,0 +1,232 @@
+import <window>
+import <camera.ge>
+import <perlin.ge>
+import <collision.ge>
+
+window.create(1280, 720, "GE Window Demo");
+window.setTitle("Hello World");
+window.setShaderFile("shaders/vert.glsl", "shaders/frag.glsl");
+
+window.setFPS(60);
+
+vec3 pos = vec3(0.0);
+vec3 vel = vec3(0.0);
+
+vec3 angle = vec3(0.0);
+
+vec3 ro = pos;
+vec3 rd = angle;
+
+void move(float speed) {
+    vel.x += speed * sin(angle.x);
+    vel.z += speed * cos(angle.x);
+}
+
+vec2 point2(float x, float y) {
+    vec2 p;
+    p.x = x;
+    p.y = y;
+    return p;
+}
+
+list height = [];
+int worldSize = 10;
+
+void genWorld(int size) {
+    float y1 = 0.0;
+    for(int yi = 0; yi < size; ++yi) {
+        float x1 = 0.0;
+        for(int xi = 0; xi < size; ++xi) {
+            height.add(10.0 * perlin(point2(x1, y1)));
+            x1 += 1.0;
+        }
+        y1 += 1.0;
+    }
+}
+
+genWorld(worldSize);
+
+float findID(int x, int y) {
+    return (y * worldSize) + x;
+}
+
+
+bool enableHitTests = true;
+bool drawHitMarker = false;
+float shroomRenderDistance = 600.0;
+
+void drawQuad(vec3 a, vec3 b, vec3 c, vec3 d, float thickness, float red, float green, float blue, float alpha) {
+    window.drawTri(a, b, c, thickness, red, green, blue, alpha);
+    window.drawTri(a, d, c, thickness,  red, green, blue, alpha);
+}
+
+void tri3D(vec3 a, vec3 b, vec3 c, float thickness, float red, float green, float blue, float alpha) {
+    window.drawTri(a, b, c, thickness, red, green, blue, alpha);
+}
+
+void quad3D(vec3 a, vec3 b, vec3 c, vec3 d, float thickness, float red, float green, float blue, float alpha) {
+    if (enableHitTests == false) {
+        drawQuad(a, b, c, d, thickness, red, green, blue, alpha);
+        return;
+    }
+
+    // Transform vertices to camera-relative space
+    vec3 a_rel = a - cam;
+    vec3 b_rel = b - cam;
+    vec3 c_rel = c - cam;
+    vec3 d_rel = d - cam;
+
+    bool hit0 = rayTriIntersection(a_rel, b_rel, c_rel, ro, rd);
+    bool hit1 = rayTriIntersection(a_rel, d_rel, c_rel, ro, rd);
+    bool hit = false;
+
+    if (hit0) {
+        hit = true;
+    } else {
+        if (hit1) {
+            hit = true;
+        }
+    }
+
+    if (hit) {
+        drawQuad(a, b, c, d, thickness, red, green, blue, alpha);
+    } else {
+        drawQuad(a, b, c, d, thickness, red * 0.5, green * 0.5, blue * 0.5, alpha);
+    }
+}
+
+
+void Zplane(vec3 pos, vec2 dim, float thickness, float red, float green, float blue, float alpha) {
+    vec3 a = vec3(pos.x - dim.x, pos.y - dim.y, pos.z);
+    vec3 b = vec3(pos.x - dim.x, pos.y + dim.y, pos.z);
+    vec3 c = vec3(pos.x + dim.x, pos.y + dim.y, pos.z);
+    vec3 d = vec3(pos.x + dim.x, pos.y - dim.y, pos.z);
+    quad3D(a, b, c, d, thickness, red, green, blue, alpha);
+}
+
+void Xplane(vec3 pos, vec2 dim, float thickness, float red, float green, float blue, float alpha) {
+    vec3 a = vec3(pos.x, pos.y - dim.y, pos.z - dim.x);
+    vec3 b = vec3(pos.x, pos.y + dim.y, pos.z - dim.x);
+    vec3 c = vec3(pos.x, pos.y + dim.y, pos.z + dim.x);
+    vec3 d = vec3(pos.x, pos.y - dim.y, pos.z + dim.x);
+    quad3D(a, b, c, d, thickness, red, green, blue, alpha);
+}
+
+void Yplane(vec3 pos, vec2 dim, float thickness, float red, float green, float blue, float alpha) {
+    vec3 a = vec3(pos.x - dim.x, pos.y, pos.z - dim.y);
+    vec3 b = vec3(pos.x - dim.x, pos.y, pos.z + dim.y);
+    vec3 c = vec3(pos.x + dim.x, pos.y, pos.z + dim.y);
+    vec3 d = vec3(pos.x + dim.x, pos.y, pos.z - dim.y);
+    quad3D(a, b, c, d, thickness, red, green, blue, alpha);
+}
+
+void cube(vec3 pos, vec3 dim, float thickness, float red, float green, float blue, float alpha) {
+    Zplane(pos + vec3(0.0, 0.0, dim.z), vec2(dim.x, dim.y), thickness, red, green, blue, alpha);
+    Zplane(pos - vec3(0.0, 0.0, dim.z), vec2(dim.x, dim.y), thickness, red, green, blue, alpha);
+
+    Xplane(pos + vec3(dim.x, 0.0, 0.0), vec2(dim.y, dim.z), thickness, red, green, blue, alpha);
+    Xplane(pos - vec3(dim.x, 0.0, 0.0), vec2(dim.y, dim.z), thickness, red, green, blue, alpha);
+
+    Yplane(pos + vec3(0.0, dim.y, 0.0), vec2(dim.x, dim.z), thickness, red, green, blue, alpha);
+    Yplane(pos - vec3(0.0, dim.y, 0.0), vec2(dim.x, dim.z), thickness, red, green, blue, alpha);
+}
+
+void shroom3D(vec3 pos, vec3 dim) {
+    Zplane(pos, vec2(dim.x, dim.y), 8.0, 1.0, 0.0, 0.0, 1.0);
+    Xplane(pos, vec2(dim.y, dim.z), 8.0, 1.0, 0.0, 0.0, 1.0);
+}
+
+
+
+list shrooms = [];
+
+void addShroom(vec3 pos) {
+    shrooms.add(pos);
+}
+
+void renderShrooms() {
+    enableHitTests = false;
+    for (int i = 0; i < shrooms.size(); ++i) {
+        vec3 shroomPos = shrooms.get(i);
+        if (length(shroomPos - cam) > shroomRenderDistance) {
+            continue;
+        }
+        shroom3D(shroomPos, vec3(10.0, 10.0, 10.0));
+    }
+    enableHitTests = true;
+}
+
+while (window.isOpen()) {
+	window.beginFrame();
+	window.clear(0.1, 0.1, 0.1, 1.0);
+
+    angle.x = window.mouseX() * 0.3;
+    angle.y = window.mouseY() * 0.3;
+
+    float speed = 0.8;
+
+    if (window.keyDown("w")) {
+        move(speed);
+    }
+    if (window.keyDown("s")) {
+        move(-speed);
+    }
+    angle.x += 90.0;
+    if (window.keyDown("d")) {
+        move(speed);
+    }
+    if (window.keyDown("a")) {
+        move(-speed);
+    }
+    angle.x -= 90.0;
+
+    vel *= 0.8;
+    pos += vel;
+
+    f = 640.0 / tan(FOV / 2.0);
+
+    cam = pos;
+    rot += (angle - rot) * 0.1;
+
+    window.setUniform("cam", cam);
+    window.setUniform("rot", rot);
+    window.setUniform("fov", FOV);
+    window.setUniform("width", window.width() * 1.0);
+    window.setUniform("height", window.height() * 1.0);
+
+    ro = vec3(0.0);
+    rd = rot;
+
+    hitPos = vec3(0.0, 0.0, 0.0);
+    closestHitDist = 1000000.0;
+
+    Zplane(vec3(-100.0, 0.0, 200.0), vec2(50.0, 100.0), 8.0, 1.0, 1.0, 1.0, 1.0);
+    Zplane(vec3(100.0, 0.0, 200.0), vec2(50.0, 100.0), 8.0, 1.0, 1.0, 1.0, 1.0);
+    Zplane(vec3(0.0, 75.0, 200.0), vec2(51.0, 25.0), 8.0, 1.0, 1.0, 1.0, 1.0);
+
+    Yplane(vec3(0.0, -100.0, 00.0), vec2(200.0, 200.0), 8.0, 1.0, 1.0, 1.0, 1.0);
+
+    // Convert hitPos from camera-relative to world space
+    hitPos = hitPos + cam;
+
+    // hitPos = floor(hitPos / 10.0) * 10.0;
+
+    if (drawHitMarker == true) {
+        cube(hitPos, vec3(5.0, 5.0, 5.0), 8.0, 1.0, 0.0, 0.0, 1.0);
+    }
+
+    if (window.mousePressed(0)) {
+        shrooms.add(hitPos);
+    }
+
+    renderShrooms();
+
+	window.drawCircle(0, 0, 2, 1.0, 1.0, 1.0, 1.0);
+
+
+	window.drawLine(-500, 300, 500, 300, 3, 0.8, 0.8, 0.8, 1.0);
+	window.drawText("Move mouse and close window to exit", -120, 340, 36);
+
+
+	window.endFrame();
+}

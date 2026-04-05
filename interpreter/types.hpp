@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <type_traits>
 #include <cmath>
+#include <memory>
 
 namespace GETypes {
 
@@ -197,9 +198,12 @@ inline Vec4Type normalize(const Vec4Type& v) {
     return v / l;
 }
 
-// List type - can store any type of values
+struct ListType;
+using ListPtr = std::shared_ptr<ListType>;
+
+// List type - can store any type of values, including nested lists
 struct ListType {
-    using Value = std::variant<IntType, FloatType, StringType, BoolType, Vec2Type, Vec3Type, Vec4Type>;
+    using Value = std::variant<IntType, FloatType, StringType, BoolType, Vec2Type, Vec3Type, Vec4Type, ListPtr>;
     std::vector<Value> elements;
     
     ListType() = default;
@@ -243,6 +247,19 @@ struct ListType {
                 return "vec3(" + numberToString(v.x) + ", " + numberToString(v.y) + ", " + numberToString(v.z) + ")";
             } else if constexpr (std::is_same_v<T, Vec4Type>) {
                 return "vec4(" + numberToString(v.x) + ", " + numberToString(v.y) + ", " + numberToString(v.z) + ", " + numberToString(v.w) + ")";
+            } else if constexpr (std::is_same_v<T, ListPtr>) {
+                if (!v) {
+                    return "[]";
+                }
+                std::string out = "[";
+                for (size_t i = 0; i < v->elements.size(); ++i) {
+                    if (i > 0) {
+                        out += ", ";
+                    }
+                    out += valueToString(v->elements[i]);
+                }
+                out += "]";
+                return out;
             }
             return std::string();
         }, value);

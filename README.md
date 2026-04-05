@@ -9,7 +9,7 @@ This document describes what the interpreter supports right now.
 Build and run a script:
 
 ~~~bash
-bash run.sh test.ge
+bash run.sh main.ge
 ~~~
 
 Or compile and run directly:
@@ -203,6 +203,10 @@ Rules:
 
 Supported constructors and operations:
 - vec2(...), vec3(...), vec4(...)
+- Scalar splat constructors are supported:
+	vec2(n) -> vec2(n, n)
+	vec3(n) -> vec3(n, n, n)
+	vec4(n) -> vec4(n, n, n, n)
 - Vector-vector math (+, -, *, /)
 - Vector-scalar math (+, -, *, /)
 - Member access (x, y, z, w)
@@ -211,6 +215,7 @@ Example:
 
 ~~~cpp
 vec3 cam = vec3(0.0, 0.0, 0.0);
+vec3 origin = vec3(0.0);
 vec3 pos = vec3(5.0, 2.0, 8.0);
 vec3 p = pos - cam;
 print(p);
@@ -310,7 +315,21 @@ It is exposed through `window.*` methods.
 - `window.setMouseVisible(visible)`
 - `window.captureMouse(enabled)`
 - `window.keyDown(keyCode)`
+- `window.keyPressed(keyCode)`
 - `window.mouseDown(button)`
+- `window.mousePressed(button)`
+
+### Shader API (GLSL)
+- `window.shaderSupported()`
+- `window.setShader(vertexSource, fragmentSource)`
+- `window.setFragmentShader(fragmentSource)`
+- `window.setShaderFile(vertexPath, fragmentPath)`
+- `window.setFragmentShaderFile(fragmentPath)`
+- `window.setUniform(name, value)`
+- `window.clearShader()`
+
+`window.setUniform` accepts GE value types: `int`, `float`, `bool`, `vec2`, `vec3`, `vec4`.
+The shader uniform type must match exactly (for example, `vec3` value must target a GLSL `vec3` uniform).
 
 ### Input State Helpers (for scripting/testing)
 - `window.setKeyState(keyCode, down)`

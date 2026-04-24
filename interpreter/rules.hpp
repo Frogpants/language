@@ -6,6 +6,7 @@
 
 enum class TokenType {
     TYPE,
+    STRUCT,
     IDENTIFIER,
     NUMBER,
     STRING,
@@ -70,6 +71,25 @@ struct FunctionDef {
     std::vector<Token> bodyTokens;  // Store the token vector for this function
 };
 
+struct StructFieldDef {
+    std::string type;
+    std::string name;
+    std::vector<Token> initializerTokens;
+};
+
+struct StructMethodDef {
+    std::string returnType;
+    std::string name;
+    std::vector<Parameter> parameters;
+    std::vector<Token> bodyTokens;
+};
+
+struct StructDef {
+    std::string name;
+    std::vector<StructFieldDef> fields;
+    std::vector<StructMethodDef> methods;
+};
+
 inline Token CurrentToken;
 
 struct Grammar {
@@ -81,6 +101,7 @@ inline std::unordered_map<std::string, Grammar> GrammarRules;
 inline std::unordered_map<std::string, TokenType> keywords;
 inline std::vector<Operator> operators;
 inline std::unordered_map<std::string, FunctionDef> functions;
+inline std::unordered_map<std::string, StructDef> structDefs;
 
 inline void registerRule(const Grammar& rule) {
     GrammarRules[rule.name] = rule;

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <set>
 #include <string>
@@ -57,6 +59,7 @@ struct NativeWindowBackend {
     int greenShift = 0;
     int blueShift = 0;
     std::vector<TriangleCommand> pendingTriangles;
+    std::unordered_map<std::string, GLuint> textureCache;
     bool shaderApiReady = false;
     GLuint activeProgram = 0;
     std::unordered_map<std::string, GLenum> uniformTypes;
@@ -85,6 +88,144 @@ struct NativeWindowBackend {
 #endif
 
     bool created = false;
+
+    static uint16_t readLE16(const unsigned char* data) {
+        return static_cast<uint16_t>(data[0]) |
+               (static_cast<uint16_t>(data[1]) << 8);
+    }
+
+    static uint32_t readLE32(const unsigned char* data) {
+        return static_cast<uint32_t>(data[0]) |
+               (static_cast<uint32_t>(data[1]) << 8) |
+               (static_cast<uint32_t>(data[2]) << 16) |
+               (static_cast<uint32_t>(data[3]) << 24);
+    }
+
+    bool loadTextureFromBmp(const std::string& path, GLuint& textureId, std::string& error) {
+#if defined(__linux__)
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) {
+            error = "Failed to open texture file: " + path;
+            return false;
+        }
+
+        std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (bytes.size() < 54) {
+            error = "Invalid BMP texture file (too small): " + path;
+            return false;
+        }
+
+        if (bytes[0] != 'B' || bytes[1] != 'M') {
+            error = "Only BMP textures are currently supported: " + path;
+            return false;
+        }
+
+        const uint32_t dataOffset = readLE32(&bytes[10]);
+        const uint32_t dibSize = readLE32(&bytes[14]);
+        if (dibSize < 40) {
+            error = "Unsupported BMP DIB header: " + path;
+            return false;
+        }
+
+        const int32_t width = static_cast<int32_t>(readLE32(&bytes[18]));
+        const int32_t height = static_cast<int32_t>(readLE32(&bytes[22]));
+        const uint16_t planes = readLE16(&bytes[26]);
+        const uint16_t bitsPerPixel = readLE16(&bytes[28]);
+        const uint32_t compression = readLE32(&bytes[30]);
+
+        if (planes != 1 || compression != 0) {
+            error = "Only uncompressed BMP textures are supported: " + path;
+            return false;
+        }
+        if (bitsPerPixel != 24 && bitsPerPixel != 32) {
+            error = "Only 24-bit and 32-bit BMP textures are supported: " + path;
+            return false;
+        }
+        if (width <= 0 || height == 0) {
+            error = "Invalid BMP dimensions: " + path;
+            return false;
+        }
+
+        const int absHeight = std::abs(height);
+        const bool bottomUp = (height > 0);
+        const int bytesPerPixel = bitsPerPixel / 8;
+        const size_t rowStride = ((static_cast<size_t>(width) * bitsPerPixel + 31u) / 32u) * 4u;
+        const size_t requiredSize = static_cast<size_t>(dataOffset) + rowStride * static_cast<size_t>(absHeight);
+        if (bytes.size() < requiredSize) {
+            error = "Corrupt BMP texture data: " + path;
+            return false;
+        }
+
+        std::vector<unsigned char> rgba(static_cast<size_t>(width) * static_cast<size_t>(absHeight) * 4u, 255u);
+        for (int row = 0; row < absHeight; ++row) {
+            const int srcRow = bottomUp ? (absHeight - 1 - row) : row;
+            const size_t srcBase = static_cast<size_t>(dataOffset) + static_cast<size_t>(srcRow) * rowStride;
+            for (int col = 0; col < width; ++col) {
+                const size_t src = srcBase + static_cast<size_t>(col) * static_cast<size_t>(bytesPerPixel);
+                const size_t dst = (static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col)) * 4u;
+                rgba[dst + 0] = bytes[src + 2];
+                rgba[dst + 1] = bytes[src + 1];
+                rgba[dst + 2] = bytes[src + 0];
+                rgba[dst + 3] = (bytesPerPixel == 4) ? bytes[src + 3] : 255u;
+            }
+        }
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        if (tex == 0) {
+            error = "Failed to allocate OpenGL texture for: " + path;
+            return false;
+        }
+
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA,
+            width,
+            absHeight,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            rgba.data()
+        );
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        textureId = tex;
+        return true;
+#else
+        (void)path;
+        (void)textureId;
+        error = "Texture loading is not implemented on this platform.";
+        return false;
+#endif
+    }
+
+    bool getOrCreateTexture(const std::string& path, GLuint& textureId, std::string& error) {
+#if defined(__linux__)
+        auto it = textureCache.find(path);
+        if (it != textureCache.end()) {
+            textureId = it->second;
+            return true;
+        }
+
+        if (!loadTextureFromBmp(path, textureId, error)) {
+            return false;
+        }
+
+        textureCache[path] = textureId;
+        return true;
+#else
+        (void)path;
+        (void)textureId;
+        error = "Texture loading is not implemented on this platform.";
+        return false;
+#endif
+    }
 
     static std::string readTextFile(const std::string& path, std::string& error) {
         std::ifstream in(path);
@@ -259,6 +400,17 @@ struct NativeWindowBackend {
                 XDestroyWindow(display, window);
                 window = 0;
             }
+
+            if (!textureCache.empty()) {
+                for (const auto& tex : textureCache) {
+                    if (tex.second != 0) {
+                        GLuint id = tex.second;
+                        glDeleteTextures(1, &id);
+                    }
+                }
+                textureCache.clear();
+            }
+
             XCloseDisplay(display);
             display = nullptr;
         }
@@ -981,6 +1133,49 @@ struct NativeWindowBackend {
         (void)r;
         (void)g;
         (void)b;
+#endif
+    }
+
+    void drawTexturedRect(int x, int y, unsigned int w, unsigned int h, float r, float g, float b, const std::string& texturePath) {
+#if defined(__linux__)
+        if (!created || !display || !window || !glContext) {
+            return;
+        }
+        if (texturePath.empty()) {
+            drawRect(x, y, w, h, r, g, b);
+            return;
+        }
+
+        flushTriangles();
+
+        GLuint tex = 0;
+        std::string error;
+        if (!getOrCreateTexture(texturePath, tex, error)) {
+            // Graceful fallback to colored rectangle when texture fails to load.
+            drawRect(x, y, w, h, r, g, b);
+            return;
+        }
+
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glColor3f(std::clamp(r, 0.0f, 1.0f), std::clamp(g, 0.0f, 1.0f), std::clamp(b, 0.0f, 1.0f));
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, 0.0f); glVertex2i(x, y);
+        glTexCoord2f(1.0f, 0.0f); glVertex2i(x + static_cast<int>(w), y);
+        glTexCoord2f(1.0f, 1.0f); glVertex2i(x + static_cast<int>(w), y + static_cast<int>(h));
+        glTexCoord2f(0.0f, 1.0f); glVertex2i(x, y + static_cast<int>(h));
+        glEnd();
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDisable(GL_TEXTURE_2D);
+#else
+        (void)x;
+        (void)y;
+        (void)w;
+        (void)h;
+        (void)r;
+        (void)g;
+        (void)b;
+        (void)texturePath;
 #endif
     }
 

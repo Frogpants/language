@@ -1,0 +1,48 @@
+import <window>
+
+window.create(1280, 720, "Physics Demo");
+window.setTitle("SandBox");
+window.setFPS(60);
+
+float dt = 0.1;
+float gravity = 9.82;
+float floorY = -310.0;
+
+list positions = [];
+list velocities = [];
+
+void spawnBox(vec2 pos) {
+    positions.add(pos);
+    velocities.add(vec2(0.0, 0.0));
+}
+
+while (window.isOpen()) {
+	window.beginFrame();
+	window.clear(1.0, 1.0, 1.0, 1.0);
+
+    if (window.mousePressed(0)) {
+        spawnBox(vec2(window.mouseX(), window.mouseY()));
+    }
+
+    list nextPositions = [];
+    list nextVelocities = [];
+
+    for (int i = 0; i < positions.size(); ++i) {
+        vec2 pos = positions.get(i);
+        vec2 vel = velocities.get(i);
+
+        vel.y -= gravity * dt;
+        pos += vel * dt;
+
+        if (pos.y >= floorY) {
+            nextPositions.add(pos);
+            nextVelocities.add(vel);
+            window.drawRect(pos.x, pos.y, 16.0, 16.0, 0.0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    positions = nextPositions;
+    velocities = nextVelocities;
+
+	window.endFrame();
+}

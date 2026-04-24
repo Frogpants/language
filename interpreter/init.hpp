@@ -20,6 +20,7 @@ inline void SetKeywords() {
     keywords["while"] = TokenType::LOOP;
     keywords["return"] = TokenType::RETURN;
     keywords["import"] = TokenType::IMPORT;
+    keywords["struct"] = TokenType::STRUCT;
     // Bool literals are intentionally tokenized as TYPE so they share type-keyword coloring.
     keywords["true"] = TokenType::TYPE;
     keywords["false"] = TokenType::TYPE;

@@ -2,6 +2,7 @@ import <window>
 import <camera.ge>
 import <perlin.ge>
 import <collision.ge>
+import <export>
 
 window.create(1280, 720, "GE Window Demo");
 window.setTitle("Hello World");
@@ -54,6 +55,26 @@ float findID(int x, int y) {
 bool enableHitTests = true;
 bool drawHitMarker = false;
 float shroomRenderDistance = 600.0;
+bool enableBackfaceCulling = true;
+float maxQuadRenderDistance = 1200.0;
+
+bool shouldCullQuad(vec3 a, vec3 b, vec3 c, vec3 d) {
+    vec3 center = (a + b + c + d) * 0.25;
+
+    if (length(center - cam) > maxQuadRenderDistance) {
+        return true;
+    }
+
+    if (enableBackfaceCulling == true) {
+        vec3 n = cross(b - a, c - a);
+        vec3 toCam = cam - center;
+        if (dot(n, toCam) <= 0.0) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 void drawQuad(vec3 a, vec3 b, vec3 c, vec3 d, float thickness, float red, float green, float blue, float alpha) {
     window.drawTri(a, b, c, thickness, red, green, blue, alpha);
@@ -65,6 +86,10 @@ void tri3D(vec3 a, vec3 b, vec3 c, float thickness, float red, float green, floa
 }
 
 void quad3D(vec3 a, vec3 b, vec3 c, vec3 d, float thickness, float red, float green, float blue, float alpha) {
+    if (shouldCullQuad(a, b, c, d)) {
+        return;
+    }
+
     if (enableHitTests == false) {
         drawQuad(a, b, c, d, thickness, red, green, blue, alpha);
         return;
@@ -160,8 +185,8 @@ while (window.isOpen()) {
 	window.beginFrame();
 	window.clear(0.1, 0.1, 0.1, 1.0);
 
-    angle.x = window.mouseX() * 0.3;
-    angle.y = window.mouseY() * 0.3;
+    angle.x = window.mouseX() * -0.3;
+    angle.y = window.mouseY() * -0.3;
 
     float speed = 0.8;
 
@@ -209,7 +234,9 @@ while (window.isOpen()) {
     // Convert hitPos from camera-relative to world space
     hitPos = hitPos + cam;
 
-    // hitPos = floor(hitPos / 10.0) * 10.0;
+    hitPos = floor(hitPos / 20.0) * 20.0;
+
+    hitPos.y += 5.0;
 
     if (drawHitMarker == true) {
         cube(hitPos, vec3(5.0, 5.0, 5.0), 8.0, 1.0, 0.0, 0.0, 1.0);
@@ -230,3 +257,5 @@ while (window.isOpen()) {
 
 	window.endFrame();
 }
+
+export("game", "windows");

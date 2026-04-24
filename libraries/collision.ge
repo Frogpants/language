@@ -1,0 +1,102 @@
+
+bool box2D(vec2 a, vec2 b, vec2 d1, vec2 d2) {
+    vec2 diff = b - a;
+    vec2 size = d1 + d2;
+    if (diff.x <= size.x) {
+        if (diff.y <= size.y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool circle2D(vec2 a, vec2 b, float r1, float r2) {
+    float diff = length(b - a);
+    float size = r1 + r2;
+    if (dif <= size) {
+        return true;
+    }
+    return false;
+}
+
+
+bool box3D(vec3 a, vec3 b, vec3 d1, vec3 d2) {
+    vec2 diff = b - a;
+    vec2 size = d1 + d2;
+    if (diff.x <= size.x) {
+        if (diff.y <= size.y) {
+            if (diff.z <= size.z) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool sphere3D(vec3 a, vec3 b, float r1, float r2) {
+    float diff = length(b - a);
+    float size = r1 + r2;
+    if (dif <= size) {
+        return true;
+    }
+    return false;
+}
+
+// 2D OOB (oriented box) collision test using SAT.
+// a/c2 = centers, h1/h2 = half sizes, a1/a2 = rotation angles in degrees.
+bool oob2D(vec2 a, vec2 b, vec2 d1, vec2 d2, float a1, float a2) {
+    vec2 h1 = d1 / 2.0;
+    vec2 h2 = d2 / 2.0;
+
+    vec2 u1 = vec2(cos(a1), sin(a1));
+    vec2 v1 = vec2(-sin(a1), cos(a1));
+    vec2 u2 = vec2(cos(a2), sin(a2));
+    vec2 v2 = vec2(-sin(a2), cos(a2));
+
+    vec2 t = b - a;
+
+    float R00 = dot(u1, u2);
+    float R01 = dot(u1, v2);
+    float R10 = dot(v1, u2);
+    float R11 = dot(v1, v2);
+
+    float absR00 = abs(R00);
+    float absR01 = abs(R01);
+    float absR10 = abs(R10);
+    float absR11 = abs(R11);
+
+    float tU1 = abs(dot(t, u1));
+    float tV1 = abs(dot(t, v1));
+    float tU2 = abs(dot(t, u2));
+    float tV2 = abs(dot(t, v2));
+
+    float ra = h1.x;
+    float rb = h2.x * absR00 + h2.y * absR01;
+    if (tU1 > ra + rb) {
+        return false;
+    }
+
+    ra = h1.y;
+    rb = h2.x * absR10 + h2.y * absR11;
+    if (tV1 > ra + rb) {
+        return false;
+    }
+
+    ra = h1.x * absR00 + h1.y * absR10;
+    rb = h2.x;
+    if (tU2 > ra + rb) {
+        return false;
+    }
+
+    ra = h1.x * absR01 + h1.y * absR11;
+    rb = h2.y;
+    if (tV2 > ra + rb) {
+        return false;
+    }
+
+    return true;
+}
+
+bool oob2D(object a, object b) {
+    return oob2D(a.pos, b.pos, a.dim, b.dim, a.dir, b.dir);
+}

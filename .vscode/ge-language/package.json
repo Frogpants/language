@@ -1,14 +1,21 @@
 {
   "name": "ge-language-support",
   "displayName": "GE Language Support",
-  "description": "Grammar and editor support for .ge files",
-  "version": "0.0.1",
+  "description": "Full IDE support for .ge files with run and export features",
+  "version": "0.1.0",
   "publisher": "local",
   "engines": {
-    "vscode": "*"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:ge",
+    "onCommand:ge.run",
+    "onCommand:ge.exportWindows",
+    "onCommand:ge.exportLinux"
   ],
   "contributes": {
     "languages": [
@@ -30,6 +37,57 @@
         "scopeName": "source.ge",
         "path": "./syntaxes/ge.tmLanguage.json"
       }
+    ],
+    "commands": [
+      {
+        "command": "ge.run",
+        "title": "Run GE",
+        "category": "GE",
+        "description": "Run the current .ge file"
+      },
+      {
+        "command": "ge.exportWindows",
+        "title": "Export to Windows",
+        "category": "GE",
+        "description": "Export the current .ge file as a Windows launcher"
+      },
+      {
+        "command": "ge.exportLinux",
+        "title": "Export to Linux",
+        "category": "GE",
+        "description": "Export the current .ge file as a Linux launcher"
+      }
+    ],
+    "configuration": {
+      "title": "GE",
+      "properties": {
+        "ge.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path or workspace-relative path to the GE executable. If empty, extension searches workspace root and PATH."
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "ge.run",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorLangId == ge"
+      }
     ]
+  },
+  "scripts": {
+    "compile": "esbuild ./extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --target=node16",
+    "watch": "npm run compile -- --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
   }
 }

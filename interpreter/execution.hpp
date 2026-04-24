@@ -11,6 +11,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <limits>
 #include <fstream>
 #include <set>
 #include <unordered_set>
@@ -31,14 +32,17 @@ struct RuntimeValue {
     GETypes::Vec3Type vec3Val;
     GETypes::Vec4Type vec4Val;
     GETypes::ListType listVal;
+    std::shared_ptr<std::unordered_map<std::string, RuntimeValue>> structFields;
     
     RuntimeValue() 
         : type(GETypes::VariableType::INT), typeName("int"), 
                       intVal(0), floatVal(0.0f), stringVal(""), boolVal(false),
                       vec2Val(0.0f, 0.0f), vec3Val(0.0f, 0.0f, 0.0f), 
-                      vec4Val(0.0f, 0.0f, 0.0f, 0.0f), listVal() {}
+                      vec4Val(0.0f, 0.0f, 0.0f, 0.0f), listVal(),
+                      structFields(std::make_shared<std::unordered_map<std::string, RuntimeValue>>()) {}
     
-    RuntimeValue(const std::string& typeStr, double num) {
+    RuntimeValue(const std::string& typeStr, double num)
+        : structFields(std::make_shared<std::unordered_map<std::string, RuntimeValue>>()) {
         type = GETypes::stringToType(typeStr);
         typeName = typeStr;
         
@@ -53,7 +57,8 @@ struct RuntimeValue {
         }
     }
     
-    RuntimeValue(const std::string& typeStr, const std::string& str) {
+    RuntimeValue(const std::string& typeStr, const std::string& str)
+        : structFields(std::make_shared<std::unordered_map<std::string, RuntimeValue>>()) {
         type = GETypes::stringToType(typeStr);
         typeName = typeStr;
         
@@ -103,6 +108,17 @@ struct RuntimeValue {
     }
 };
 
+inline RuntimeValue deepCopyRuntimeValue(const RuntimeValue& value) {
+    RuntimeValue out = value;
+    out.structFields = std::make_shared<std::unordered_map<std::string, RuntimeValue>>();
+    if (value.structFields) {
+        for (const auto& entry : *value.structFields) {
+            (*out.structFields)[entry.first] = deepCopyRuntimeValue(entry.second);
+        }
+    }
+    return out;
+}
+
 inline int getOperatorPrecedence(const std::string& op) {
     for (const auto& registeredOp : operators) {
         if (registeredOp.symbol == op) {
@@ -145,6 +161,26 @@ inline bool isTypeKeywordName(const std::string& value) {
     return value == "void" || value == "int" || value == "float" || value == "string" ||
            value == "list" || value == "bool" || value == "vec2" || value == "vec3" ||
            value == "vec4";
+}
+
+inline bool isStructTypeName(const std::string& value) {
+    return structDefs.find(value) != structDefs.end();
+}
+
+inline bool isKnownValueTypeName(const std::string& value) {
+    return isTypeKeywordName(value) || isStructTypeName(value);
+}
+
+inline bool isTypeDeclarationStartToken(const std::vector<Token>& tokens, size_t index) {
+    if (index >= tokens.size()) {
+        return false;
+    }
+
+    if (tokens[index].type == TokenType::TYPE && isTypeKeywordName(tokens[index].value)) {
+        return true;
+    }
+
+    return tokens[index].type == TokenType::IDENTIFIER && isStructTypeName(tokens[index].value);
 }
 
 inline bool isTypeKeywordToken(const Token& token) {
@@ -224,6 +260,11 @@ inline RuntimeValue makeDefaultValueForType(const std::string& typeName) {
         v.vec4Val = GETypes::Vec4Type();
     } else if (typeName == "list") {
         v.listVal = GETypes::ListType();
+    } else if (isStructTypeName(typeName)) {
+        const StructDef& def = structDefs[typeName];
+        for (const auto& field : def.fields) {
+            (*v.structFields)[field.name] = makeDefaultValueForType(field.type);
+        }
     }
     return v;
 }
@@ -232,6 +273,9 @@ inline std::string getRuntimeTypeToken(const RuntimeValue& value) {
     if (value.typeName == "int" || value.typeName == "float" || value.typeName == "string" ||
         value.typeName == "bool" || value.typeName == "vec2" || value.typeName == "vec3" ||
         value.typeName == "vec4" || value.typeName == "list") {
+        return value.typeName;
+    }
+    if (isStructTypeName(value.typeName)) {
         return value.typeName;
     }
     return "unknown";
@@ -326,7 +370,14 @@ inline double getMemberNumericValue(
             throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
         }
     } else {
-        throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
+        if (!obj.structFields) {
+            throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
+        }
+        auto fieldIt = obj.structFields->find(memberName);
+        if (fieldIt == obj.structFields->end()) {
+            throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
+        }
+        memberValue = deepCopyRuntimeValue(fieldIt->second);
     }
 
     if (memberValue.typeName == "float" || memberValue.typeName == "int" || memberValue.typeName == "bool") {
@@ -393,6 +444,16 @@ inline RuntimeValue getMemberRuntimeValue(
             return out;
         }
     }
+    if (isStructTypeName(obj.typeName)) {
+        if (!obj.structFields) {
+            throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
+        }
+        auto fieldIt = obj.structFields->find(memberName);
+        if (fieldIt == obj.structFields->end()) {
+            throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
+        }
+        return deepCopyRuntimeValue(fieldIt->second);
+    }
     throw std::runtime_error("Unknown member access: " + objectName + "." + memberName);
 }
 
@@ -420,6 +481,29 @@ inline void printValue(const RuntimeValue& val) {
             }
         }
         out = out + "]";
+    } else if (isStructTypeName(val.typeName)) {
+        out = out + val.typeName + "{";
+        bool first = true;
+        if (val.structFields) {
+            for (const auto& entry : *val.structFields) {
+                if (!first) {
+                    out = out + ", ";
+                }
+                first = false;
+                out = out + entry.first + ":";
+                const RuntimeValue& f = entry.second;
+                if (f.typeName == "string") {
+                    out = out + f.getStringValue();
+                } else if (f.typeName == "bool") {
+                    out = out + (f.getBoolValue() ? "true" : "false");
+                } else if (f.typeName == "float" || f.typeName == "int") {
+                    out = out + formatRuntimeNumber(f);
+                } else {
+                    out = out + f.typeName;
+                }
+            }
+        }
+        out = out + "}";
     }
     out = out + "\n";
     std::cout << out;
@@ -498,6 +582,20 @@ inline RuntimeValue evaluateRuntimeExpression(
     const std::vector<Token>& tokens,
     size_t start,
     size_t end,
+    const std::unordered_map<std::string, RuntimeValue>& symbolTable
+);
+
+inline RuntimeValue executeStructMethod(
+    RuntimeValue& objectValue,
+    const std::string& methodName,
+    const std::vector<RuntimeValue>& args,
+    std::unordered_map<std::string, RuntimeValue>& symbolTable
+);
+
+inline RuntimeValue executeStructMethodReadOnly(
+    const RuntimeValue& objectValue,
+    const std::string& methodName,
+    const std::vector<RuntimeValue>& args,
     const std::unordered_map<std::string, RuntimeValue>& symbolTable
 );
 
@@ -1073,23 +1171,37 @@ inline void executeWindowMethodStatement(const std::string& methodName, const st
         return;
     }
     if (methodName == "drawRect") {
-        if (args.size() != 8) {
-            throw std::runtime_error("window.drawRect expects 8 arguments");
+        if (args.size() != 8 && args.size() != 9) {
+            throw std::runtime_error("window.drawRect expects 8 arguments, with optional 9th texture path string");
         }
+
+        std::string texturePath;
+        if (args.size() == 9) {
+            if (args[8].typeName != "string") {
+                throw std::runtime_error("window.drawRect optional 9th argument must be a texture path string");
+            }
+            texturePath = args[8].getStringValue();
+        }
+
+        // Backward compatibility: allow 8-arg form where last arg is a texture path.
+        if (args.size() == 8 && args[7].typeName == "string") {
+            texturePath = args[7].getStringValue();
+        }
+
         if (windowState.created) {
             const int x = centeredToWindowPixelX(args[0].getNumberValue());
             const int y = centeredToWindowPixelY(args[1].getNumberValue());
             const unsigned int w = static_cast<unsigned int>(std::max(0.0, args[2].getNumberValue()));
             const unsigned int h = static_cast<unsigned int>(std::max(0.0, args[3].getNumberValue()));
-            windowState.backend.drawRect(
-                x,
-                y,
-                w,
-                h,
-                static_cast<float>(args[4].getNumberValue()),
-                static_cast<float>(args[5].getNumberValue()),
-                static_cast<float>(args[6].getNumberValue())
-            );
+            const float r = static_cast<float>(args[4].getNumberValue());
+            const float g = static_cast<float>(args[5].getNumberValue());
+            const float b = static_cast<float>(args[6].getNumberValue());
+
+            if (!texturePath.empty()) {
+                windowState.backend.drawTexturedRect(x, y, w, h, r, g, b, texturePath);
+            } else {
+                windowState.backend.drawRect(x, y, w, h, r, g, b);
+            }
         }
         windowState.queuedDrawCommands++;
         return;
@@ -1493,6 +1605,9 @@ inline RuntimeValue executeMethodCallReadOnly(
     auto objIt = symbolTable.find(objectName);
     if (objIt == symbolTable.end()) {
         throw std::runtime_error("Unknown object: " + objectName);
+    }
+    if (isStructTypeName(objIt->second.typeName)) {
+        return executeStructMethodReadOnly(objIt->second, methodName, args, symbolTable);
     }
     if (objIt->second.typeName != "list") {
         throw std::runtime_error("Method calls currently supported only on list objects");
@@ -2022,7 +2137,7 @@ inline RuntimeValue evaluateRuntimeExpression(
             if (it == symbolTable.end()) {
                 throw std::runtime_error("Unknown identifier: " + tokens[start].value);
             }
-            return it->second;
+            return deepCopyRuntimeValue(it->second);
         }
     }
 
@@ -2066,7 +2181,7 @@ inline RuntimeValue evaluateRuntimeExpression(
 
 inline RuntimeValue castRuntimeValueToType(const RuntimeValue& value, const std::string& targetType) {
     if (targetType == value.typeName) {
-        return value;
+        return deepCopyRuntimeValue(value);
     }
 
     if (targetType == "int") {
@@ -2119,7 +2234,41 @@ inline RuntimeValue castRuntimeValueToType(const RuntimeValue& value, const std:
         return out;
     }
 
+    if (isStructTypeName(targetType)) {
+        if (value.typeName != targetType) {
+            throw std::runtime_error("Cannot assign value of type '" + value.typeName + "' to struct type '" + targetType + "'");
+        }
+        return deepCopyRuntimeValue(value);
+    }
+
     return value;
+}
+
+inline RuntimeValue makeStructInstanceWithInitializers(
+    const std::string& structType,
+    const std::unordered_map<std::string, RuntimeValue>& symbolTable
+) {
+    RuntimeValue instance = makeDefaultValueForType(structType);
+    if (!isStructTypeName(structType) || !instance.structFields) {
+        return instance;
+    }
+
+    const StructDef& def = structDefs[structType];
+    for (const auto& field : def.fields) {
+        if (field.initializerTokens.empty()) {
+            continue;
+        }
+
+        RuntimeValue initValue = evaluateRuntimeExpression(
+            field.initializerTokens,
+            0,
+            field.initializerTokens.size() - 1,
+            symbolTable
+        );
+        (*instance.structFields)[field.name] = castRuntimeValueToType(initValue, field.type);
+    }
+
+    return instance;
 }
 
 inline size_t executeDeclaration(
@@ -2132,7 +2281,7 @@ inline size_t executeDeclaration(
     }
 
     if (
-        !isTypeKeywordToken(tokens[start]) ||
+        !isTypeDeclarationStartToken(tokens, start) ||
         tokens[start + 1].type != TokenType::IDENTIFIER ||
         (tokens[start + 2].type != TokenType::EQUAL && tokens[start + 2].type != TokenType::SEMICOLON)
     ) {
@@ -2144,7 +2293,11 @@ inline size_t executeDeclaration(
     
     // Support GLSL-style default declarations: vec2 a;
     if (tokens[start + 2].type == TokenType::SEMICOLON) {
-        symbolTable[varName] = makeDefaultValueForType(varType);
+        if (isStructTypeName(varType)) {
+            symbolTable[varName] = makeStructInstanceWithInitializers(varType, symbolTable);
+        } else {
+            symbolTable[varName] = deepCopyRuntimeValue(makeDefaultValueForType(varType));
+        }
         return start + 3;
     }
 
@@ -2171,7 +2324,7 @@ inline size_t executeDeclaration(
         symbolTable[varName] = RuntimeValue(varType, tokens[start + 3].value);
     }
     // Handle vector assignments and constructor calls
-    else if (isVectorTypeName(varType)) {
+    else if (isVectorTypeName(varType) || isStructTypeName(varType)) {
         RuntimeValue value = evaluateRuntimeExpression(tokens, start + 3, semicolonIndex - 1, symbolTable);
         symbolTable[varName] = castRuntimeValueToType(value, varType);
     } else {
@@ -2214,25 +2367,62 @@ inline size_t executeMemberAssignment(
     }
 
     const std::string assignmentOp = tokens[start + 3].value;
-    const float rhsValue = static_cast<float>(evaluateExpression(tokens, start + 4, semicolonIndex - 1, symbolTable));
     RuntimeValue& obj = it->second;
     if (obj.typeName == "vec2") {
+        const float rhsValue = static_cast<float>(evaluateExpression(tokens, start + 4, semicolonIndex - 1, symbolTable));
         if (memberName == "x") obj.vec2Val.x = static_cast<float>(applyScalarAssignmentOperator(obj.vec2Val.x, rhsValue, assignmentOp));
         else if (memberName == "y") obj.vec2Val.y = static_cast<float>(applyScalarAssignmentOperator(obj.vec2Val.y, rhsValue, assignmentOp));
         else throw std::runtime_error("Unknown vec2 member: " + memberName);
     } else if (obj.typeName == "vec3") {
+        const float rhsValue = static_cast<float>(evaluateExpression(tokens, start + 4, semicolonIndex - 1, symbolTable));
         if (memberName == "x") obj.vec3Val.x = static_cast<float>(applyScalarAssignmentOperator(obj.vec3Val.x, rhsValue, assignmentOp));
         else if (memberName == "y") obj.vec3Val.y = static_cast<float>(applyScalarAssignmentOperator(obj.vec3Val.y, rhsValue, assignmentOp));
         else if (memberName == "z") obj.vec3Val.z = static_cast<float>(applyScalarAssignmentOperator(obj.vec3Val.z, rhsValue, assignmentOp));
         else throw std::runtime_error("Unknown vec3 member: " + memberName);
     } else if (obj.typeName == "vec4") {
+        const float rhsValue = static_cast<float>(evaluateExpression(tokens, start + 4, semicolonIndex - 1, symbolTable));
         if (memberName == "x") obj.vec4Val.x = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.x, rhsValue, assignmentOp));
         else if (memberName == "y") obj.vec4Val.y = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.y, rhsValue, assignmentOp));
         else if (memberName == "z") obj.vec4Val.z = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.z, rhsValue, assignmentOp));
         else if (memberName == "w") obj.vec4Val.w = static_cast<float>(applyScalarAssignmentOperator(obj.vec4Val.w, rhsValue, assignmentOp));
         else throw std::runtime_error("Unknown vec4 member: " + memberName);
+    } else if (isStructTypeName(obj.typeName)) {
+        if (!obj.structFields) {
+            throw std::runtime_error("Invalid struct instance for member assignment: " + objectName);
+        }
+        auto fieldIt = obj.structFields->find(memberName);
+        if (fieldIt == obj.structFields->end()) {
+            throw std::runtime_error("Unknown struct member: " + memberName);
+        }
+
+        RuntimeValue rhs = evaluateRuntimeExpression(tokens, start + 4, semicolonIndex - 1, symbolTable);
+        RuntimeValue& lhsField = fieldIt->second;
+
+        if (assignmentOp == "=") {
+            lhsField = castRuntimeValueToType(rhs, lhsField.typeName);
+            return semicolonIndex + 1;
+        }
+
+        if (isVectorTypeName(lhsField.typeName)) {
+            lhsField = applyCompoundVectorAssignment(lhsField, rhs, assignmentOp);
+            return semicolonIndex + 1;
+        }
+
+        if (lhsField.typeName == "int" || lhsField.typeName == "float" || lhsField.typeName == "bool") {
+            const double assigned = applyScalarAssignmentOperator(lhsField.getNumberValue(), rhs.getNumberValue(), assignmentOp);
+            if (lhsField.typeName == "int") {
+                lhsField = RuntimeValue("int", static_cast<double>(static_cast<int>(assigned)));
+            } else if (lhsField.typeName == "bool") {
+                lhsField = RuntimeValue("bool", assigned != 0.0 ? 1.0 : 0.0);
+            } else {
+                lhsField = RuntimeValue("float", assigned);
+            }
+            return semicolonIndex + 1;
+        }
+
+        throw std::runtime_error("Compound assignment is not supported for member type: " + lhsField.typeName);
     } else {
-        throw std::runtime_error("Member assignment is only supported for vec types");
+        throw std::runtime_error("Member assignment is only supported for vec and struct types");
     }
 
     return semicolonIndex + 1;
@@ -2307,6 +2497,12 @@ inline size_t executeAssignment(
     } else if (isVectorTypeName(varType)) {
         RuntimeValue rhs = evaluateRuntimeExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
         symbolTable[varName] = applyCompoundVectorAssignment(it->second, rhs, assignmentOp);
+    } else if (isStructTypeName(varType)) {
+        if (assignmentOp != "=") {
+            throw std::runtime_error("Compound assignment is not supported for struct type: " + varType);
+        }
+        RuntimeValue rhs = evaluateRuntimeExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
+        symbolTable[varName] = castRuntimeValueToType(rhs, varType);
     } else {
         const double rhs = evaluateExpression(tokens, start + 2, semicolonIndex - 1, symbolTable);
         const double lhs = it->second.getNumberValue();
@@ -2355,8 +2551,12 @@ inline size_t executeMethodCallStatement(
     if (objIt == symbolTable.end()) {
         throw std::runtime_error("Unknown object: " + objectName);
     }
+    if (isStructTypeName(objIt->second.typeName)) {
+        (void)executeStructMethod(objIt->second, methodName, args, symbolTable);
+        return semicolonIndex + 1;
+    }
     if (objIt->second.typeName != "list") {
-        throw std::runtime_error("Method calls currently supported only on list objects and window");
+        throw std::runtime_error("Method calls currently supported only on list, struct objects, and window");
     }
 
     RuntimeValue& obj = objIt->second;
@@ -2636,6 +2836,212 @@ inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const st
             return out;
         }
         throw std::runtime_error("cross expects 2 vec3 arguments");
+    }
+
+    if (funcName == "distance") {
+        if (args.size() != 2) {
+            throw std::runtime_error("distance expects exactly 2 arguments");
+        }
+        if (args[0].typeName == "vec2" && args[1].typeName == "vec2") {
+            return RuntimeValue("float", GETypes::length(args[0].vec2Val - args[1].vec2Val));
+        }
+        if (args[0].typeName == "vec3" && args[1].typeName == "vec3") {
+            return RuntimeValue("float", GETypes::length(args[0].vec3Val - args[1].vec3Val));
+        }
+        if (args[0].typeName == "vec4" && args[1].typeName == "vec4") {
+            return RuntimeValue("float", GETypes::length(args[0].vec4Val - args[1].vec4Val));
+        }
+        return RuntimeValue("float", std::abs(args[0].getNumberValue() - args[1].getNumberValue()));
+    }
+
+    if (funcName == "reflect") {
+        if (args.size() != 2) {
+            throw std::runtime_error("reflect expects exactly 2 arguments");
+        }
+        if (args[0].typeName == "vec2" && args[1].typeName == "vec2") {
+            const float d = GETypes::dot(args[0].vec2Val, args[1].vec2Val);
+            RuntimeValue out = makeDefaultValueForType("vec2");
+            out.vec2Val = args[0].vec2Val - (args[1].vec2Val * (2.0f * d));
+            return out;
+        }
+        if (args[0].typeName == "vec3" && args[1].typeName == "vec3") {
+            const float d = GETypes::dot(args[0].vec3Val, args[1].vec3Val);
+            RuntimeValue out = makeDefaultValueForType("vec3");
+            out.vec3Val = args[0].vec3Val - (args[1].vec3Val * (2.0f * d));
+            return out;
+        }
+        if (args[0].typeName == "vec4" && args[1].typeName == "vec4") {
+            const float d = GETypes::dot(args[0].vec4Val, args[1].vec4Val);
+            RuntimeValue out = makeDefaultValueForType("vec4");
+            out.vec4Val = args[0].vec4Val - (args[1].vec4Val * (2.0f * d));
+            return out;
+        }
+        throw std::runtime_error("reflect overload mismatch");
+    }
+
+    if (funcName == "refract") {
+        if (args.size() != 3) {
+            throw std::runtime_error("refract expects exactly 3 arguments");
+        }
+        const float eta = static_cast<float>(args[2].getNumberValue());
+        if (args[0].typeName == "vec2" && args[1].typeName == "vec2") {
+            const float d = GETypes::dot(args[1].vec2Val, args[0].vec2Val);
+            const float k = 1.0f - eta * eta * (1.0f - d * d);
+            RuntimeValue out = makeDefaultValueForType("vec2");
+            if (k < 0.0f) {
+                out.vec2Val = GETypes::Vec2Type(0.0f);
+            } else {
+                out.vec2Val = args[0].vec2Val * eta - args[1].vec2Val * (eta * d + std::sqrt(k));
+            }
+            return out;
+        }
+        if (args[0].typeName == "vec3" && args[1].typeName == "vec3") {
+            const float d = GETypes::dot(args[1].vec3Val, args[0].vec3Val);
+            const float k = 1.0f - eta * eta * (1.0f - d * d);
+            RuntimeValue out = makeDefaultValueForType("vec3");
+            if (k < 0.0f) {
+                out.vec3Val = GETypes::Vec3Type(0.0f);
+            } else {
+                out.vec3Val = args[0].vec3Val * eta - args[1].vec3Val * (eta * d + std::sqrt(k));
+            }
+            return out;
+        }
+        if (args[0].typeName == "vec4" && args[1].typeName == "vec4") {
+            const float d = GETypes::dot(args[1].vec4Val, args[0].vec4Val);
+            const float k = 1.0f - eta * eta * (1.0f - d * d);
+            RuntimeValue out = makeDefaultValueForType("vec4");
+            if (k < 0.0f) {
+                out.vec4Val = GETypes::Vec4Type(0.0f);
+            } else {
+                out.vec4Val = args[0].vec4Val * eta - args[1].vec4Val * (eta * d + std::sqrt(k));
+            }
+            return out;
+        }
+        throw std::runtime_error("refract overload mismatch");
+    }
+
+    if (funcName == "step") {
+        if (args.size() != 2) {
+            throw std::runtime_error("step expects exactly 2 arguments");
+        }
+        auto step1 = [](double edge, double x) -> double {
+            return x < edge ? 0.0 : 1.0;
+        };
+
+        if (args[1].typeName == "vec2") {
+            const GETypes::Vec2Type edge = (args[0].typeName == "vec2")
+                ? args[0].vec2Val
+                : GETypes::Vec2Type(static_cast<float>(args[0].getNumberValue()));
+            RuntimeValue out = makeDefaultValueForType("vec2");
+            out.vec2Val = GETypes::Vec2Type(
+                step1(edge.x, args[1].vec2Val.x),
+                step1(edge.y, args[1].vec2Val.y)
+            );
+            return out;
+        }
+        if (args[1].typeName == "vec3") {
+            const GETypes::Vec3Type edge = (args[0].typeName == "vec3")
+                ? args[0].vec3Val
+                : GETypes::Vec3Type(static_cast<float>(args[0].getNumberValue()));
+            RuntimeValue out = makeDefaultValueForType("vec3");
+            out.vec3Val = GETypes::Vec3Type(
+                step1(edge.x, args[1].vec3Val.x),
+                step1(edge.y, args[1].vec3Val.y),
+                step1(edge.z, args[1].vec3Val.z)
+            );
+            return out;
+        }
+        if (args[1].typeName == "vec4") {
+            const GETypes::Vec4Type edge = (args[0].typeName == "vec4")
+                ? args[0].vec4Val
+                : GETypes::Vec4Type(static_cast<float>(args[0].getNumberValue()));
+            RuntimeValue out = makeDefaultValueForType("vec4");
+            out.vec4Val = GETypes::Vec4Type(
+                step1(edge.x, args[1].vec4Val.x),
+                step1(edge.y, args[1].vec4Val.y),
+                step1(edge.z, args[1].vec4Val.z),
+                step1(edge.w, args[1].vec4Val.w)
+            );
+            return out;
+        }
+
+        return RuntimeValue("float", step1(args[0].getNumberValue(), args[1].getNumberValue()));
+    }
+
+    if (funcName == "mod") {
+        if (args.size() != 2) {
+            throw std::runtime_error("mod expects exactly 2 arguments");
+        }
+        auto mod1 = [](double x, double y) -> double {
+            if (y == 0.0) return 0.0;
+            return std::fmod(x, y);
+        };
+
+        if (args[0].typeName == "vec2") {
+            const GETypes::Vec2Type y = (args[1].typeName == "vec2")
+                ? args[1].vec2Val
+                : GETypes::Vec2Type(static_cast<float>(args[1].getNumberValue()));
+            RuntimeValue out = makeDefaultValueForType("vec2");
+            out.vec2Val = GETypes::Vec2Type(mod1(args[0].vec2Val.x, y.x), mod1(args[0].vec2Val.y, y.y));
+            return out;
+        }
+        if (args[0].typeName == "vec3") {
+            const GETypes::Vec3Type y = (args[1].typeName == "vec3")
+                ? args[1].vec3Val
+                : GETypes::Vec3Type(static_cast<float>(args[1].getNumberValue()));
+            RuntimeValue out = makeDefaultValueForType("vec3");
+            out.vec3Val = GETypes::Vec3Type(
+                mod1(args[0].vec3Val.x, y.x),
+                mod1(args[0].vec3Val.y, y.y),
+                mod1(args[0].vec3Val.z, y.z)
+            );
+            return out;
+        }
+        if (args[0].typeName == "vec4") {
+            const GETypes::Vec4Type y = (args[1].typeName == "vec4")
+                ? args[1].vec4Val
+                : GETypes::Vec4Type(static_cast<float>(args[1].getNumberValue()));
+            RuntimeValue out = makeDefaultValueForType("vec4");
+            out.vec4Val = GETypes::Vec4Type(
+                mod1(args[0].vec4Val.x, y.x),
+                mod1(args[0].vec4Val.y, y.y),
+                mod1(args[0].vec4Val.z, y.z),
+                mod1(args[0].vec4Val.w, y.w)
+            );
+            return out;
+        }
+        return RuntimeValue("float", mod1(args[0].getNumberValue(), args[1].getNumberValue()));
+    }
+
+    if (funcName == "inversesqrt") {
+        if (args.size() != 1) {
+            throw std::runtime_error("inversesqrt expects exactly 1 argument");
+        }
+        auto invsqrt1 = [](double x) -> double {
+            if (x <= 0.0) return 0.0;
+            return 1.0 / std::sqrt(x);
+        };
+        if (args[0].typeName == "vec2") {
+            RuntimeValue out = makeDefaultValueForType("vec2");
+            out.vec2Val = GETypes::Vec2Type(invsqrt1(args[0].vec2Val.x), invsqrt1(args[0].vec2Val.y));
+            return out;
+        }
+        if (args[0].typeName == "vec3") {
+            RuntimeValue out = makeDefaultValueForType("vec3");
+            out.vec3Val = GETypes::Vec3Type(invsqrt1(args[0].vec3Val.x), invsqrt1(args[0].vec3Val.y), invsqrt1(args[0].vec3Val.z));
+            return out;
+        }
+        if (args[0].typeName == "vec4") {
+            RuntimeValue out = makeDefaultValueForType("vec4");
+            out.vec4Val = GETypes::Vec4Type(
+                invsqrt1(args[0].vec4Val.x),
+                invsqrt1(args[0].vec4Val.y),
+                invsqrt1(args[0].vec4Val.z),
+                invsqrt1(args[0].vec4Val.w)
+            );
+            return out;
+        }
+        return RuntimeValue("float", invsqrt1(args[0].getNumberValue()));
     }
 
     if (funcName == "min") {
@@ -3022,7 +3428,9 @@ inline RuntimeValue executeBuiltinFunction(const std::string& funcName, const st
 inline bool isBuiltinFunctionName(const std::string& name) {
     return name == "vec2" || name == "vec3" || name == "vec4" || name == "sin" ||
            name == "cos" || name == "tan" || name == "length" || name == "dot" ||
-           name == "normalize" || name == "cross" || name == "min" || name == "max" ||
+           name == "normalize" || name == "cross" || name == "distance" ||
+           name == "reflect" || name == "refract" || name == "step" ||
+           name == "mod" || name == "inversesqrt" || name == "min" || name == "max" ||
            name == "clamp" || name == "abs" || name == "floor" || name == "ceil" ||
            name == "fract" || name == "sign" || name == "smoothstep" || name == "radians" ||
            name == "degrees" || name == "mix" || name == "sqrt";
@@ -3128,7 +3536,7 @@ inline FunctionPlannedStatementKind classifyFunctionBodyStatementAt(const std::v
     if (i >= tokens.size()) return FunctionPlannedStatementKind::UNKNOWN;
 
     if (tokens[i].type == TokenType::RETURN) return FunctionPlannedStatementKind::RETURN_STMT;
-    if (isTypeKeywordToken(tokens[i])) return FunctionPlannedStatementKind::DECLARATION;
+    if (isTypeDeclarationStartToken(tokens, i)) return FunctionPlannedStatementKind::DECLARATION;
     if (tokens[i].type == TokenType::PRINT) return FunctionPlannedStatementKind::PRINT;
     if (tokens[i].type == TokenType::IF) return FunctionPlannedStatementKind::IF_STMT;
     if (tokens[i].type == TokenType::LOOP && tokens[i].value == "for") return FunctionPlannedStatementKind::FOR_STMT;
@@ -3219,12 +3627,245 @@ inline std::vector<FunctionPlannedStatement> buildFunctionBodyPlan(const std::ve
     return plan;
 }
 
+inline bool isNumericTypeName(const std::string& typeName) {
+    return typeName == "int" || typeName == "float" || typeName == "bool";
+}
+
+inline int conversionPenalty(const std::string& fromType, const std::string& toType) {
+    if (fromType == toType) {
+        return 0;
+    }
+
+    // Prefer widening numeric conversions over narrowing.
+    if (fromType == "int" && toType == "float") {
+        return 1;
+    }
+    if (fromType == "bool" && (toType == "int" || toType == "float")) {
+        return 2;
+    }
+    if (fromType == "float" && toType == "int") {
+        return 3;
+    }
+    if (fromType == "float" && toType == "bool") {
+        return 4;
+    }
+
+    // Other castable combinations are allowed but less preferred.
+    return 5;
+}
+
+inline bool tryResolveFunctionOverload(
+    const std::string& funcName,
+    const std::vector<RuntimeValue>& args,
+    std::string& resolvedKey,
+    std::vector<RuntimeValue>& resolvedArgs,
+    std::string& errorDetail
+) {
+    const std::string typedKey = buildFunctionKey(funcName, [&]() {
+        std::vector<std::string> t;
+        t.reserve(args.size());
+        for (const auto& arg : args) {
+            t.push_back(getRuntimeTypeToken(arg));
+        }
+        return t;
+    }());
+
+    auto exactIt = functions.find(typedKey);
+    if (exactIt != functions.end()) {
+        resolvedKey = typedKey;
+        resolvedArgs = args;
+        return true;
+    }
+
+    bool foundAnyNamed = false;
+    bool foundAnyArity = false;
+    bool foundCompatible = false;
+    bool ambiguous = false;
+    int bestPenalty = std::numeric_limits<int>::max();
+    std::string bestKey;
+    std::vector<RuntimeValue> bestArgs;
+
+    for (const auto& entry : functions) {
+        const FunctionDef& candidate = entry.second;
+        if (candidate.name != funcName) {
+            continue;
+        }
+        foundAnyNamed = true;
+
+        if (candidate.parameters.size() != args.size()) {
+            continue;
+        }
+        foundAnyArity = true;
+
+        int totalPenalty = 0;
+        std::vector<RuntimeValue> converted;
+        converted.reserve(args.size());
+        bool compatible = true;
+
+        for (size_t i = 0; i < args.size(); ++i) {
+            const std::string fromType = getRuntimeTypeToken(args[i]);
+            const std::string toType = candidate.parameters[i].type;
+
+            try {
+                converted.push_back(castRuntimeValueToType(args[i], toType));
+            } catch (...) {
+                compatible = false;
+                break;
+            }
+
+            if (isNumericTypeName(fromType) && isNumericTypeName(toType)) {
+                totalPenalty += conversionPenalty(fromType, toType);
+            } else if (fromType != toType) {
+                totalPenalty += conversionPenalty(fromType, toType);
+            }
+        }
+
+        if (!compatible) {
+            continue;
+        }
+
+        foundCompatible = true;
+        if (totalPenalty < bestPenalty) {
+            bestPenalty = totalPenalty;
+            bestKey = entry.first;
+            bestArgs = converted;
+            ambiguous = false;
+        } else if (totalPenalty == bestPenalty && entry.first != bestKey) {
+            ambiguous = true;
+        }
+    }
+
+    if (foundCompatible && !ambiguous) {
+        resolvedKey = bestKey;
+        resolvedArgs = bestArgs;
+        return true;
+    }
+
+    if (ambiguous) {
+        errorDetail = "Ambiguous function overload: " + typedKey;
+        return false;
+    }
+    if (!foundAnyNamed) {
+        errorDetail = "Unknown function: " + funcName;
+        return false;
+    }
+    if (!foundAnyArity) {
+        errorDetail = "No overload with matching argument count for function: " + funcName;
+        return false;
+    }
+
+    errorDetail = "Unknown function overload: " + typedKey;
+    return false;
+}
+
+inline size_t parseStructDef(const std::vector<Token>& tokens, size_t start) {
+    if (start + 2 >= tokens.size() || tokens[start].type != TokenType::STRUCT) {
+        throw std::runtime_error("Invalid struct definition");
+    }
+    if (tokens[start + 1].type != TokenType::IDENTIFIER) {
+        throw std::runtime_error("Expected struct name after 'struct'");
+    }
+    if (tokens[start + 2].type != TokenType::LBRACE) {
+        throw std::runtime_error("Expected '{' after struct name");
+    }
+
+    const std::string structName = tokens[start + 1].value;
+    const size_t bodyEnd = findMatchingBrace(tokens, start + 2);
+
+    StructDef def;
+    def.name = structName;
+
+    size_t i = start + 3;
+    while (i < bodyEnd) {
+        if (tokens[i].type == TokenType::SEMICOLON) {
+            i++;
+            continue;
+        }
+
+        if (!isTypeDeclarationStartToken(tokens, i)) {
+            throw std::runtime_error("Struct members must be typed fields or methods: " + structName);
+        }
+        if (i + 1 >= bodyEnd || tokens[i + 1].type != TokenType::IDENTIFIER) {
+            throw std::runtime_error("Expected struct member name in '" + structName + "'");
+        }
+
+        // Method: <type> <name>(...) { ... }
+        if (i + 2 < bodyEnd && tokens[i + 2].type == TokenType::LPAREN) {
+            StructMethodDef method;
+            method.returnType = tokens[i].value;
+            method.name = tokens[i + 1].value;
+
+            size_t p = i + 3;
+            while (p < bodyEnd && tokens[p].type != TokenType::RPAREN) {
+                if (isTypeDeclarationStartToken(tokens, p)) {
+                    if (p + 1 < bodyEnd && tokens[p + 1].type == TokenType::IDENTIFIER) {
+                        method.parameters.push_back({tokens[p].value, tokens[p + 1].value});
+                        p += 2;
+                        if (p < bodyEnd && tokens[p].type == TokenType::COMMA) {
+                            p++;
+                        }
+                        continue;
+                    }
+                    throw std::runtime_error("Expected method parameter name in '" + structName + "::" + method.name + "'");
+                }
+                throw std::runtime_error("Expected typed method parameters in '" + structName + "::" + method.name + "'");
+            }
+
+            if (p >= bodyEnd || tokens[p].type != TokenType::RPAREN) {
+                throw std::runtime_error("Expected ')' in method declaration: " + structName + "::" + method.name);
+            }
+            if (p + 1 >= bodyEnd || tokens[p + 1].type != TokenType::LBRACE) {
+                throw std::runtime_error("Expected method body for: " + structName + "::" + method.name);
+            }
+
+            const size_t methodBodyEnd = findMatchingBrace(tokens, p + 1);
+            method.bodyTokens.assign(tokens.begin() + (p + 2), tokens.begin() + methodBodyEnd);
+            def.methods.push_back(method);
+            i = methodBodyEnd + 1;
+            continue;
+        }
+
+        StructFieldDef field;
+        field.type = tokens[i].value;
+        field.name = tokens[i + 1].value;
+
+        size_t semi = i + 2;
+        while (semi < bodyEnd && tokens[semi].type != TokenType::SEMICOLON) {
+            semi++;
+        }
+        if (semi >= bodyEnd) {
+            throw std::runtime_error("Missing ';' at end of struct field: " + field.name);
+        }
+
+        if (i + 2 < semi) {
+            if (tokens[i + 2].type != TokenType::EQUAL || tokens[i + 2].value != "=") {
+                throw std::runtime_error("Only '=' initializers are supported for struct fields: " + field.name);
+            }
+            if (i + 3 >= semi) {
+                throw std::runtime_error("Missing initializer expression for struct field: " + field.name);
+            }
+            field.initializerTokens.assign(tokens.begin() + (i + 3), tokens.begin() + semi);
+        }
+
+        def.fields.push_back(field);
+        i = semi + 1;
+    }
+
+    structDefs[structName] = def;
+
+    size_t next = bodyEnd + 1;
+    if (next < tokens.size() && tokens[next].type == TokenType::SEMICOLON) {
+        next++;
+    }
+    return next;
+}
+
 inline size_t parseFunctionDef(const std::vector<Token>& tokens, size_t start) {
     if (start < tokens.size()) {
         CurrentToken = tokens[start];
     }
     // Format: returnType funcName ( param1, param2 ) { body }
-    if (start + 2 >= tokens.size() || !isTypeKeywordToken(tokens[start])) {
+    if (start + 2 >= tokens.size() || !isTypeDeclarationStartToken(tokens, start)) {
         throw std::runtime_error("Invalid function definition");
     }
     
@@ -3243,7 +3884,7 @@ inline size_t parseFunctionDef(const std::vector<Token>& tokens, size_t start) {
     std::vector<Parameter> params;
     size_t i = start + 3;
     while (i < tokens.size() && tokens[i].type != TokenType::RPAREN) {
-        if (isTypeKeywordToken(tokens[i])) {
+        if (isTypeDeclarationStartToken(tokens, i)) {
             std::string paramType = tokens[i].value;
             if (i + 1 < tokens.size() && tokens[i + 1].type == TokenType::IDENTIFIER) {
                 params.push_back({paramType, tokens[i + 1].value});
@@ -3278,8 +3919,12 @@ inline size_t parseFunctionDef(const std::vector<Token>& tokens, size_t start) {
     func.bodyStart = bodyStart;
     func.bodyEnd = bodyEnd;
     func.bodyTokens.assign(tokens.begin() + bodyStart, tokens.begin() + bodyEnd);
-    
-    functions[buildFunctionKeyFromParams(funcName, params)] = func;
+
+    const std::string typedKey = buildFunctionKeyFromParams(funcName, params);
+    if (functions.find(typedKey) != functions.end()) {
+        throw std::runtime_error("Duplicate function overload: " + typedKey);
+    }
+    functions[typedKey] = func;
     
     return bodyEnd + 1;
 }
@@ -3434,6 +4079,263 @@ inline ReturnValue executeFunction(const std::string& funcName, const std::vecto
     return ReturnValue();
 }
 
+inline bool tryResolveStructMethodOverload(
+    const StructDef& def,
+    const std::string& methodName,
+    const std::vector<RuntimeValue>& args,
+    const StructMethodDef*& resolvedMethod,
+    std::vector<RuntimeValue>& resolvedArgs,
+    std::string& errorDetail
+) {
+    bool foundAnyNamed = false;
+    bool foundAnyArity = false;
+    bool foundCompatible = false;
+    bool ambiguous = false;
+    int bestPenalty = std::numeric_limits<int>::max();
+    const StructMethodDef* best = nullptr;
+    std::vector<RuntimeValue> bestArgs;
+
+    for (const auto& method : def.methods) {
+        if (method.name != methodName) {
+            continue;
+        }
+        foundAnyNamed = true;
+
+        if (method.parameters.size() != args.size()) {
+            continue;
+        }
+        foundAnyArity = true;
+
+        int totalPenalty = 0;
+        std::vector<RuntimeValue> converted;
+        converted.reserve(args.size());
+        bool compatible = true;
+
+        for (size_t i = 0; i < args.size(); ++i) {
+            const std::string fromType = getRuntimeTypeToken(args[i]);
+            const std::string toType = method.parameters[i].type;
+            try {
+                converted.push_back(castRuntimeValueToType(args[i], toType));
+            } catch (...) {
+                compatible = false;
+                break;
+            }
+
+            if (fromType != toType) {
+                if (isNumericTypeName(fromType) && isNumericTypeName(toType)) {
+                    totalPenalty += conversionPenalty(fromType, toType);
+                } else {
+                    totalPenalty += 5;
+                }
+            }
+        }
+
+        if (!compatible) {
+            continue;
+        }
+
+        foundCompatible = true;
+        if (totalPenalty < bestPenalty) {
+            bestPenalty = totalPenalty;
+            best = &method;
+            bestArgs = converted;
+            ambiguous = false;
+        } else if (totalPenalty == bestPenalty) {
+            ambiguous = true;
+        }
+    }
+
+    if (foundCompatible && !ambiguous && best != nullptr) {
+        resolvedMethod = best;
+        resolvedArgs = bestArgs;
+        return true;
+    }
+
+    if (ambiguous) {
+        errorDetail = "Ambiguous struct method overload: " + def.name + "::" + methodName;
+    } else if (!foundAnyNamed) {
+        errorDetail = "Unknown struct method: " + def.name + "::" + methodName;
+    } else if (!foundAnyArity) {
+        errorDetail = "No overload with matching argument count for struct method: " + def.name + "::" + methodName;
+    } else {
+        errorDetail = "No compatible overload for struct method: " + def.name + "::" + methodName;
+    }
+    return false;
+}
+
+inline RuntimeValue executeStructMethod(
+    RuntimeValue& objectValue,
+    const std::string& methodName,
+    const std::vector<RuntimeValue>& args,
+    std::unordered_map<std::string, RuntimeValue>& symbolTable
+) {
+    if (!isStructTypeName(objectValue.typeName)) {
+        throw std::runtime_error("Method target is not a struct instance");
+    }
+    if (!objectValue.structFields) {
+        objectValue.structFields = std::make_shared<std::unordered_map<std::string, RuntimeValue>>();
+    }
+
+    const StructDef& def = structDefs[objectValue.typeName];
+    const StructMethodDef* method = nullptr;
+    std::vector<RuntimeValue> resolvedArgs;
+    std::string resolveError;
+    if (!tryResolveStructMethodOverload(def, methodName, args, method, resolvedArgs, resolveError)) {
+        throw std::runtime_error(resolveError);
+    }
+
+    std::unordered_map<std::string, RuntimeValue>& localSymbolTable = symbolTable;
+
+    struct ScopedBindings {
+        std::unordered_map<std::string, RuntimeValue>& symbols;
+        std::unordered_map<std::string, RuntimeValue> shadowedValues;
+        std::unordered_set<std::string> transientNames;
+
+        explicit ScopedBindings(std::unordered_map<std::string, RuntimeValue>& table)
+            : symbols(table) {}
+
+        void capture(const std::string& name) {
+            if (shadowedValues.find(name) != shadowedValues.end() || transientNames.count(name) != 0) {
+                return;
+            }
+
+            auto it = symbols.find(name);
+            if (it != symbols.end()) {
+                shadowedValues.emplace(name, it->second);
+            } else {
+                transientNames.insert(name);
+            }
+        }
+
+        ~ScopedBindings() {
+            for (const auto& name : transientNames) {
+                symbols.erase(name);
+            }
+            for (const auto& entry : shadowedValues) {
+                symbols[entry.first] = entry.second;
+            }
+        }
+    } scopedBindings(localSymbolTable);
+
+    for (size_t i = 0; i < method->parameters.size(); ++i) {
+        const std::string& paramName = method->parameters[i].name;
+        scopedBindings.capture(paramName);
+        localSymbolTable[paramName] = deepCopyRuntimeValue(resolvedArgs[i]);
+    }
+
+    for (const auto& field : def.fields) {
+        scopedBindings.capture(field.name);
+        auto it = objectValue.structFields->find(field.name);
+        if (it != objectValue.structFields->end()) {
+            localSymbolTable[field.name] = deepCopyRuntimeValue(it->second);
+        } else {
+            localSymbolTable[field.name] = makeDefaultValueForType(field.type);
+        }
+    }
+
+    auto syncFieldsBack = [&]() {
+        for (const auto& field : def.fields) {
+            auto itLocal = localSymbolTable.find(field.name);
+            if (itLocal != localSymbolTable.end()) {
+                (*objectValue.structFields)[field.name] = castRuntimeValueToType(itLocal->second, field.type);
+            }
+        }
+    };
+
+    static std::unordered_map<std::string, std::vector<FunctionPlannedStatement>> structMethodPlanCache;
+    std::vector<std::string> methodParamTypes;
+    methodParamTypes.reserve(method->parameters.size());
+    for (const auto& p : method->parameters) {
+        methodParamTypes.push_back(p.type);
+    }
+    const std::string methodCacheKey = objectValue.typeName + "::" + buildFunctionKey(method->name, methodParamTypes);
+
+    auto planIt = structMethodPlanCache.find(methodCacheKey);
+    if (planIt == structMethodPlanCache.end()) {
+        planIt = structMethodPlanCache.emplace(methodCacheKey, buildFunctionBodyPlan(method->bodyTokens)).first;
+    }
+
+    for (const auto& stmt : planIt->second) {
+        const size_t i = stmt.start;
+        if (i >= method->bodyTokens.size()) {
+            continue;
+        }
+
+        CurrentToken = method->bodyTokens[i];
+        if (stmt.kind == FunctionPlannedStatementKind::RETURN_STMT) {
+            size_t exprStart = i + 1;
+            size_t semi = exprStart;
+            while (semi < method->bodyTokens.size() && method->bodyTokens[semi].type != TokenType::SEMICOLON) {
+                semi++;
+            }
+
+            syncFieldsBack();
+
+            if (semi == exprStart || method->returnType == "void") {
+                return RuntimeValue();
+            }
+
+            RuntimeValue result = evaluateRuntimeExpression(method->bodyTokens, exprStart, semi - 1, localSymbolTable);
+            return castRuntimeValueToType(result, method->returnType);
+        }
+
+        if (stmt.kind == FunctionPlannedStatementKind::DECLARATION) {
+            executeDeclaration(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::ASSIGNMENT) {
+            executeAssignment(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::MEMBER_ASSIGNMENT) {
+            executeMemberAssignment(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::METHOD_CALL) {
+            executeMethodCallStatement(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::PRINT) {
+            executePrint(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::IF_STMT) {
+            executeIf(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::FOR_STMT) {
+            executeFor(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::WHILE_STMT) {
+            executeWhile(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+        if (stmt.kind == FunctionPlannedStatementKind::FUNCTION_CALL) {
+            executeFunctionCallStatement(method->bodyTokens, i, localSymbolTable);
+            continue;
+        }
+    }
+
+    syncFieldsBack();
+
+    if (method->returnType == "void") {
+        return RuntimeValue();
+    }
+    return makeDefaultValueForType(method->returnType);
+}
+
+inline RuntimeValue executeStructMethodReadOnly(
+    const RuntimeValue& objectValue,
+    const std::string& methodName,
+    const std::vector<RuntimeValue>& args,
+    const std::unordered_map<std::string, RuntimeValue>& symbolTable
+) {
+    RuntimeValue objectCopy = deepCopyRuntimeValue(objectValue);
+    std::unordered_map<std::string, RuntimeValue> localSymbols = symbolTable;
+    return executeStructMethod(objectCopy, methodName, args, localSymbols);
+}
+
 inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start, std::unordered_map<std::string, RuntimeValue>& symbolTable) {
     // Format: funcName(arg1, arg2, ...)
     if (start < tokens.size()) {
@@ -3475,24 +4377,15 @@ inline RuntimeValue callFunction(const std::vector<Token>& tokens, size_t start,
         return executeBuiltinFunction(funcName, args);
     }
 
-    std::vector<std::string> argTypes;
-    argTypes.reserve(args.size());
-    for (const auto& arg : args) {
-        argTypes.push_back(getRuntimeTypeToken(arg));
-    }
-
-    const std::string typedKey = buildFunctionKey(funcName, argTypes);
-    if (functions.find(typedKey) != functions.end()) {
-        funcName = typedKey;
-    } else {
-        // Backward compatibility: allow old untyped entry if present.
-        if (functions.find(funcName) == functions.end()) {
-            throw std::runtime_error("Unknown function overload: " + typedKey);
-        }
+    std::string resolvedKey;
+    std::vector<RuntimeValue> resolvedArgs;
+    std::string resolutionError;
+    if (!tryResolveFunctionOverload(funcName, args, resolvedKey, resolvedArgs, resolutionError)) {
+        throw std::runtime_error(resolutionError);
     }
 
     // Execute the function
-    ReturnValue ret = executeFunction(funcName, args, tokens, symbolTable);
+    ReturnValue ret = executeFunction(resolvedKey, resolvedArgs, tokens, symbolTable);
     
     if (ret.hasValue) {
         return ret.value;
@@ -3544,7 +4437,7 @@ struct PlannedStatement {
 inline PlannedStatementKind classifyStatementAt(const std::vector<Token>& tokens, size_t i) {
     if (i >= tokens.size()) return PlannedStatementKind::UNKNOWN;
 
-    if (isTypeKeywordToken(tokens[i])) return PlannedStatementKind::DECLARATION;
+    if (isTypeDeclarationStartToken(tokens, i)) return PlannedStatementKind::DECLARATION;
     if (tokens[i].type == TokenType::PRINT) return PlannedStatementKind::PRINT;
     if (tokens[i].type == TokenType::IF) return PlannedStatementKind::IF_STMT;
     if (tokens[i].type == TokenType::LOOP && tokens[i].value == "for") return PlannedStatementKind::FOR_STMT;
@@ -4134,8 +5027,12 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
     size_t i = 0;
     while (i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE) {
         CurrentToken = tokens[i];
+        if (tokens[i].type == TokenType::STRUCT) {
+            i = parseStructDef(tokens, i);
+            continue;
+        }
         // Look for TYPE followed by IDENTIFIER followed by LPAREN (function definition)
-        if (isTypeKeywordToken(tokens[i]) && 
+        if (isTypeDeclarationStartToken(tokens, i) && 
             i + 2 < tokens.size() && 
             tokens[i + 1].type == TokenType::IDENTIFIER &&
             tokens[i + 2].type == TokenType::LPAREN) {
@@ -4149,8 +5046,12 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
     i = 0;
     while (i < tokens.size() && tokens[i].type != TokenType::END_OF_FILE) {
         CurrentToken = tokens[i];
+        if (tokens[i].type == TokenType::STRUCT) {
+            i = parseStructDef(tokens, i);
+            continue;
+        }
         // Skip function definitions
-        if (isTypeKeywordToken(tokens[i]) && 
+        if (isTypeDeclarationStartToken(tokens, i) && 
             i + 2 < tokens.size() && 
             tokens[i + 1].type == TokenType::IDENTIFIER &&
             tokens[i + 2].type == TokenType::LPAREN) {
@@ -4163,7 +5064,7 @@ inline std::unordered_map<std::string, RuntimeValue> executeProgram(const std::v
             continue;
         }
         
-        if (isTypeKeywordToken(tokens[i])) {
+        if (isTypeDeclarationStartToken(tokens, i)) {
             // Check if this is a function call in a declaration
             // e.g., float z = rand();
             size_t j = i + 2;

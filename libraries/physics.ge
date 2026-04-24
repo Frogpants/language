@@ -1,0 +1,135 @@
+import <window>
+import <collision.ge>
+
+float dt = 0.1;
+float G = 6.676 * 10.0^-11.0; // Gravitational Constant
+float SoL = 299792458; // Speed of Light
+float ly = 9.461 * 10.0^15.0; // Light-Year
+float sm = 1.989 * 10.0^30.0; // Solar Mass
+
+float em = 5.9722 * 10.0^24.0; // Earth Mass
+float er = 6.371 * 10.0^6; // Earth Radius
+float au = 1.496 * 10.0^11; // Astronomical Unit
+
+vec2 origin = vec2(0.0);
+
+vec2 perp(vec2 v) {
+    return vec2(-v.y, v.x);
+}
+
+float cross2(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+vec2 rotate(vec2 p, vec2 r, float angle) {
+    vec2 d = p - r;
+    float x = d.x;
+    d.x = d.x * cos(-angle) - d.y * sin(-angle);
+    d.y = x * sin(-angle) + d.y * cos(-angle);
+    return d + r;
+}
+
+object Body {
+    vec2 pos = vec2(0.0);
+    vec2 vel = vec2(0.0);
+    vec2 force = vec2(0.0);
+
+    float dir = 0.0;
+    float av = 0.0;
+    float torque = 0.0;
+
+    float mass = 2700;
+    float invMass = 1.0 / mass;
+
+    float inertia = mass * 2.0 / 12.0;
+    float invInertia = 1.0 / inertia;
+
+    vec2 dim = vec2(16.0);
+    vec2 hlf = dim / 2.0;
+
+    float restitution = 0.2;
+
+    int id = 0;
+
+    void applyForce(float f, float angle) {
+        force += f * vec2(sin(angle), cos(angle));
+    }
+
+    void resolveCollision(Body body) {
+        vec2 local = rotate(body.pos, pos, -dir);
+        local = local + pos;
+        vec2 p = hlf - abs(local);
+
+        vec2 normal = vec2(0.0);
+        if (p.x < p.y) {
+            normal.x = sign(local.x);
+        } else {
+            normal.y = sign(local.y);
+        }
+
+        normal = rotate(normal, origin, dir);
+        float depth = min(p.x, p.y);
+
+        vec2 contact = vec2(clamp(local.x, -hlf.x, hlf.x), clamp(local.y, -hlf.x, hlf.x));
+        contact = rotate(contact, pos, dir);
+
+        vec2 correction = normal * depth * 0.5;
+
+        pos -= correction;
+        body.pos += correction;
+
+        vec2 ra = contact - pos;
+        vec2 rb = contact - body.pos;
+
+        vec2 va = vel + perp(ra) * av;
+        vec2 vb = body.vel + perp(rb) * av;
+        vec2 rv = vb - va;
+        float vn = dot(rv, normal);
+
+
+        float denom = (invMass + body.invMass) + (cross2(ra,normal)^2.0) * invInertia + (cross2(rb,normal)^2.0) * body.invInertia;
+        float j = -(1 + min(restitution, body.restitution)) * vn / denom;
+        vec2 impulse = normal * j;
+
+        vel -= impulse * invMass;
+        body.vel += impulse * body.invMass;
+        av -= cross2(ra, impulse) * invInertia;
+        body.av += cross2(rb, impulse) * body.invInertia;
+    }
+
+    void collide(list bds) {
+        for (int i = 0; i < bds.size(); ++i) {
+            if (bds[i].id == id) {
+                continue;
+            }
+            if (oob2D(this, bds[i])) {
+                resolveCollision(bds[i]);
+            }
+        }
+    }
+
+    void update(list bds) {
+        force = vec2(0.0);
+        torque = 0.0;
+        
+        float g = G * em / ((er + pos.y)^2.0);
+        applyForce(g * mass, 180.0);
+
+        if (pos.y < -100.0) {
+            applyForce(g * mass, 0.0);
+            pos.y = -100.0;
+            vel.y = 0.0;
+        }
+
+        collide(bds);
+
+        vel += force * invMass * dt;
+        pos += vel * dt;
+
+        av += torque * invInertia * dt;
+        dir += av * dt;
+
+        window.drawRect(pos.x, pos.y, dim.x, dim.y, 0.0, 0.0, 0.0, dir);
+    }
+};
+

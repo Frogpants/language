@@ -1,0 +1,58 @@
+import <window>
+// import <game/player.ge>
+
+window.create(1280, 720, "GE Window Demo");
+window.setTitle("Communtiy");
+
+window.setFPS(60);
+
+
+vec2 mouse = vec2(0.0);
+
+
+struct Player {
+    vec2 pos = vec2(0.0);
+    vec2 vel = vec2(0.0);
+}
+
+Player player;
+
+vec2 normalize(vec2 v) {
+    return v / length(normal);
+}
+
+void controls(float speed) {
+    if (window.keyDown("w")) {
+        player.vel.y += speed;
+    }
+    if (window.keyDown("s")) {
+        player.vel.y -= speed;
+    }
+    if (window.keyDown("d")) {
+        player.vel.x += speed;
+    }
+    if (window.keyDown("a")) {
+        player.vel.x -= speed;
+    }
+
+    player.vel = normalize(player.vel) * speed;
+
+    player.vel *= 0.9;
+    player.pos += player.vel;
+}
+
+
+while (window.isOpen()) {
+	window.beginFrame();
+	window.clear(0.01, 0.01, 0.15, 1.0);
+
+    mouse = vec2(window.mouseX(), window.mouseY());
+
+    window.drawCircle(mouse.x, mouse.y, 2, 1.0, 1.0, 1.0, 1.0);
+
+    controls(0.4);
+
+    window.drawRect(player.pos.x, player.pos.y, 16, 16, 1.0, 1.0, 1.0, 1.0);
+
+	window.endFrame();
+}
